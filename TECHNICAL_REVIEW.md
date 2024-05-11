@@ -45,7 +45,7 @@ A `state` might not be compressible (details in next section). We need to use 1 
 
 In this case, the compression ratio for this `state` would be: `(256 * 8 + 1) / (256 * 8) = 1.00048828125`. 
 
-It is not compressed, instead, it increased the size by a little bit due to the introduced header.
+It is not compressed, instead, it increased the size by a little bit based on the introduced header.
 
 ### 2.2 Compressible State
 
