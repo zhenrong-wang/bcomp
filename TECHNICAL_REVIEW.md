@@ -70,7 +70,7 @@ We need to record the original 8 bits(1 byte) of the compressed bytes. A diction
 
 `0xMM 0xNN 0xPP 0xQQ ... `
 
-Note that the element of dictionary doesn't necessarily require 8 bits, we can use another 2 bits to indicate the real size.
+Note that the element of dictionary doesn't necessarily require 8 bits, we can use another 1 bit to indicate the real size.
 
 With all the methodology above, we can now design the header of a compressed `state`:
 
