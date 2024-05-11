@@ -55,11 +55,11 @@ Then, we can use several ways to compress it based on the **sorted** frequency s
 
 Let's use:
 
-`Top(N) = sorted_freq[0].frequnxy + ... + sorted_freq[N-1].frequency`
+`Top(N) = sorted_freq[0].frequncy + ... + sorted_freq[N-1].frequency`
 
 `Top(M, N) = Top(N) - Top(M)`
 
-We can use choose either method:
+We can use either method of the 4:
 
 - A. Compress the `Top[2]` bytes to 1 bit. Leave the others as 8 bits.
 - B. Compress the `Top[4]` bytes to 2 bits. Leave the others as 8 bits.
