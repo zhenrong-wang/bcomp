@@ -4,7 +4,7 @@
 
 # 0. Abstract
 
-This article described a simple, bit-based, possible algorithm of losless compression. 
+This article described a simple, bit-based, possible algorithm of lossless compression. 
 
 # 1. Backgrounds
 
