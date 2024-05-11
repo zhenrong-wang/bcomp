@@ -41,15 +41,15 @@ The `index` ranges in `[0, 255]`, while the `frequency` of each index ranges in 
 
 ### 2.1 Uncompressible State
 
-A state might not be compressible (details in next section). We need to use 1 bit, that is, `0` as the header of an uncompressible state.
+A `state` might not be compressible (details in next section). We need to use 1 bit, that is, `0` as the header of an uncompressible `state`.
 
-In this case, the compression ratio for this state would be: `(256 * 8 + 1) / (256 * 8) = 1.00048828125`. 
+In this case, the compression ratio for this `state` would be: `(256 * 8 + 1) / (256 * 8) = 1.00048828125`. 
 
 It is not compressed, instead, it increased the size by a little bit due to the introduced header.
 
 ### 2.2 Compressible State
 
-For a compressible state, first of all, we need 1 bit, that is, `1` as the header.
+For a compressible `state`, first of all, we need 1 bit, that is, `1` as the header.
 
 Then, we can use several ways to compress it due to the **sorted** frequency statistics. 
 
@@ -72,7 +72,7 @@ We need to record the original 8 bits(1 byte) of the compressed bytes. A diction
 
 Note that the element of dictionary doesn't necessarily require 8 bits, we can use another 2 bits to indicate the real size.
 
-With all the methodology above, we can now design the header of a compressed state:
+With all the methodology above, we can now design the header of a compressed `state`:
 
 ```
 FLAG    METHOD   DICT_ELEM_SIZE
@@ -103,7 +103,7 @@ The next sub-block would be the compressed bytes with variable length (not 8 bit
 
 Again, there might be many uncompressible bytes (low-frequency bytes). Each uncompressible bytes would be expanded to 9 bits because a header 0 is needed to indicate the following 8 bits are not compressed.
 
-For compressible bytes (high-frequency bytes recorded in the dictionary), we put one bit, that is `1` to indicate the compression. The actual length of the compressed byte would be reflected by the `METHOD` code of this state.
+For compressible bytes (high-frequency bytes recorded in the dictionary), we put one bit, that is `1` to indicate the compression. The actual length of the compressed byte would be reflected by the `METHOD` code of this `state`.
 
 ```
 Method  METHOD  COMPRESSED_BITS_WITH_HEADER
@@ -113,9 +113,9 @@ C       10      3 for Top(2), 4 for Top(2,6)
 D       11      4
 ```
 
-For each state, we calculate the possible compression ratio of the 4 methods above and determine the real method adopted and put it to the header as METHOD code. For the DICT_ELEM_SIZE, we calculate the maximum size of the index of `Top(N)` and determin the size and the code in the header.
+For each `state`, we calculate the possible compression ratio of the 4 methods above and determine the real method adopted and put it to the header as METHOD code. For the DICT_ELEM_SIZE, we calculate the maximum size of the index of `Top(N)` and determin the size and the code in the header.
 
-If all the possible compression ratios are greater than 1.0, we just give up and tag it as "uncompressible" with a one-bit header `0`, and move on to the next state.
+If all the possible compression ratios are greater than 1.0, we just give up and tag it as "uncompressible" with a one-bit header `0`, and move on to the next `state`.
 
 With all the efforts above, this method would be implementable.
 
