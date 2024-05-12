@@ -76,9 +76,9 @@ With all the methodology above, we can now design the header of a compressed `st
 
 ```
 FLAG    METHOD   DICT_ELEM_SIZE
-1       xx       x
+1       xx       xx
 ```
-The header length is fixed as 4 bits.
+The header length is fixed as 5 bits.
 
 The remaining length would be variable. 
 
@@ -86,17 +86,21 @@ First sub-block would be the dictionary. Here is the table:
 
 ```
 Method  METHOD  DICT_ELEM_SIZE  #Elems_of_dict  Elem_size   Dict_length
-A       00      0               2               4           8
-A       00      1               2               8           16
+A       00      00              2               1           2
+A       00      01              2               4           8
+A       00      10              2               8           16
 
-B       01      0               4               4           16
-B       01      1               4               8           32
+B       01      00              4               2           8
+B       01      01              4               4           16
+B       01      10              4               8           32
 
-C       10      0               6               4           24
-C       10      1               6               8           48
+C       11      00              6               3           18
+C       11      01              6               6           36
+C       11      10              6               8           48
 
-D       11      0               6               4           24
-D       11      1               6               8           48
+D       11      00              6               3           18
+D       11      01              6               6           36
+D       11      10              6               8           48
 
 ```
 The next sub-block would be the compressed bytes with variable length (not 8 bits). 
