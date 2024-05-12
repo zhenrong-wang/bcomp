@@ -254,7 +254,7 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
                 }
                 else {
                     append_comp_byte(comp_state, (uint8_t)0xC0, 2);
-                    compressed_byte = freq_pos << 6;
+                    compressed_byte = (freq_pos - 2) << 6;
                     append_comp_byte(comp_state, compressed_byte, 2);
                 }
             }
@@ -336,13 +336,14 @@ int decompression_core(const uint8_t *decomp_state_head, const uint16_t orig_byt
                 }
                 if(byte_comp_flag == 0) {
                     if(get_next_bits(&decom_state, 1, &dict_elem_index) < 0) {
-                        return 3;
+                        return -3;
                     }
                 }
                 else {
                     if(get_next_bits(&decom_state, 2, &dict_elem_index) < 0) {
-                        return 3;
+                        return -3;
                     }
+                    dict_elem_index += 2;
                 }
                 state[i] = dict_elems[dict_elem_index];
             }
@@ -362,7 +363,7 @@ int main(int argc, char **argv) {
     uint8_t decompressed[256] = {0x00,};
     uint16_t i;
     for(i = 0; i < 256; i++) {
-        state[i] = i % 5 + 20;
+        state[i] = i % 6 + 20;
     }
     printf("INPUT: %d bits\n", 2048);
     for(i = 0; i < 256; i++) {
@@ -370,17 +371,6 @@ int main(int argc, char **argv) {
     }
     putchar('\n');
     putchar('\n');
-    /*FILE *file_p = fopen(argv[1], "rb");
-    if(file_p == NULL) {
-        printf("File IO error.\n");
-        return 1;
-    }*/
-    //uint64_t target_bits = 0;
-    /*srand(time(0));
-    /*for(uint16_t i = 0; i < 256; i++) {
-        a[i] = rand() % 256;
-        printf("%d\n", a[i]);
-    }*/
     uint16_t bcomp_bits = 0;
     struct bcomp_state state_out;
 
@@ -400,15 +390,5 @@ int main(int argc, char **argv) {
         printf("%x ", decompressed[i]);
     }
     putchar('\n');
-
-
-    /*while(fread(state, sizeof(uint8_t), 256, file_p) == 256) {
-        compress_core(state, NULL, &bcomp_bits);
-        target_bits += bcomp_bits;
-    }
-    int64_t total_bytes = ftello(file_p);
-    fclose(file_p);*/
-
-    //printf(":::::::::%lld::::::%lld::::%lf\n", target_bits / 8, total_bytes, (double)target_bits / total_bytes / 8);
     return 0;
 }
