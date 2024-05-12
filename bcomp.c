@@ -331,20 +331,20 @@ int decompression_core(const uint8_t *decomp_state_head, const uint16_t orig_byt
         }
         else {
             if(comp_method == 2) {
-                printf("here!\n");
                 if(get_next_bits(&decom_state, 1, &byte_comp_flag) < 0) {
                     return -3;
                 }
                 if(byte_comp_flag == 0) {
-                    if(get_next_bits(&decom_state, 1, state + i) < 0) {
+                    if(get_next_bits(&decom_state, 1, &dict_elem_index) < 0) {
                         return 3;
                     }
                 }
                 else {
-                    if(get_next_bits(&decom_state, 2, state + i) < 0) {
+                    if(get_next_bits(&decom_state, 2, &dict_elem_index) < 0) {
                         return 3;
                     }
                 }
+                state[i] = dict_elems[dict_elem_index];
             }
             else {
                 if(get_next_bits(&decom_state, comp_byte_size[comp_method], &dict_elem_index) < 0) {
