@@ -367,6 +367,43 @@ int decompression_core(const uint8_t *decomp_state_head, const uint16_t orig_byt
     return 0;
 }
 
+#if defined fuzz && fuzz == 1
+
+#define crash(x) do{ if(!(x)){ int volatile* volatile ptr; ptr = 0; *ptr = 0; } }while(0)
+
+void fuzz_1(unsigned char const* const data, size_t const size)
+{
+    uint8_t state[256];
+    struct bcomp_state state_out;
+    uint16_t bcomp_bits;
+    uint8_t decompressed[256];
+
+    if(!(size >= 256)){ return; }
+    memcpy(&state[0], data, 256);
+    compress_core(&state[0], 256, &state_out, &bcomp_bits);
+    decompression_core(&state_out.bytes[0], 256, 0, &decompressed[0]);
+    crash(memcmp(&decompressed[0], &state[0], 256) == 0);
+}
+
+void fuzz_2(unsigned char const* const data, size_t const size)
+{
+    struct bcomp_state state;
+    uint8_t decompressed[256];
+
+    if(!(size >= sizeof(state))){ return; }
+    memcpy(&state, data, sizeof(state));
+    decompression_core(&state.bytes[0], 256, 0, &decompressed[0]);
+}
+
+int LLVMFuzzerTestOneInput(unsigned char const* const data, size_t const size)
+{
+    fuzz_1(data, size);
+    fuzz_2(data, size);
+    return 0;
+}
+
+#else
+
 int main(int argc, char **argv) {
     uint8_t state[256] = {0x00,};
     uint8_t decompressed[256] = {0x00,};
@@ -401,3 +438,5 @@ int main(int argc, char **argv) {
     putchar('\n');
     return 0;
 }
+
+#endif

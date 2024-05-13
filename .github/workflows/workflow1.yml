@@ -1,0 +1,7 @@
+"on": "push"
+"jobs":
+  "job1":
+    "runs-on": "ubuntu-latest"
+    "steps":
+      - "uses": "actions/checkout@main"
+      - "run": "bash .github/workflows/job1.sh"
