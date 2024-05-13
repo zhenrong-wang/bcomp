@@ -1,3 +1,12 @@
+/**
+ * Copyright (C) 2022-present Zhenrong WANG
+ *   -> https://github.com/zhenrong-wang
+ *   -> X/Twitter: @wangzhr4
+ * This code is distributed under the license: MIT License
+ * Originally written by Zhenrong WANG
+ * mailto: zhenrongwang@live.com 
+ */
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
