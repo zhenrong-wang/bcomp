@@ -19,6 +19,10 @@
 #define GET_MIN(a,b) (((a) < (b)) ? a : b)
 
 #define FULL_STATE_BYTES 256
+#define DECOMP_INGEST_BYTES 1024
+
+/* For test purpose. */
+#define TEST_FILE_SIZE 9
 
 struct freq_matrix {
     uint8_t index;
@@ -30,17 +34,28 @@ struct bcomp_byte {
     uint8_t suffix_bits;
 };
 
+struct bcomp_obuffer {
+    uint8_t bytes_array[257];
+    uint16_t bytes_valid;
+    uint8_t prev_tail;
+    uint8_t prev_tail_high_bits;
+    uint8_t io_end;
+};
+
 struct bcomp_state {
     uint8_t  bytes[257];
     uint16_t curr_byte;
     uint8_t  curr_bits_suffix;
-    uint16_t  total_bits_suffix;
+    uint16_t  total_bits;
+    uint8_t io_end;
 };
 
 struct decomp_state {
-    const uint8_t *bytes_head;
-    uint16_t curr_byte;
+    uint8_t *bytes_head;
+    uint64_t curr_byte;
     uint8_t curr_bits_offset;
+    uint64_t stream_bytes_curr;
+    uint64_t stream_bytes_total;
 };
 
 int compare(const void *a, const void *b) {  
@@ -49,7 +64,7 @@ int compare(const void *a, const void *b) {
     return ptr_b->freq - ptr_a->freq;
 }
 
-int16_t is_top_freq(const struct freq_matrix *frequency, const uint8_t start, const uint8_t end, const uint8_t byte) {
+int8_t is_top_freq(const struct freq_matrix *frequency, const uint8_t start, const uint8_t end, const uint8_t byte) {
     for(uint8_t i = start; i < end; i++) {
         if(byte == frequency[i].index) {
             return i;
@@ -58,28 +73,64 @@ int16_t is_top_freq(const struct freq_matrix *frequency, const uint8_t start, co
     return -1;
 }
 
-int get_next_bits(struct decomp_state *decomp_state, const uint8_t num_of_bits, uint8_t *res) {
-    if(decomp_state == NULL || decomp_state->bytes_head ==NULL || res == NULL) {
+
+int get_next_bits(uint8_t buffer[], const uint64_t buffer_size_byte, const uint8_t num_of_bits, uint8_t *res, struct decomp_state *decom_state, FILE *stream) {
+    if(stream == NULL || res == NULL || decom_state == NULL) {
         return -1;
     }
-    if(num_of_bits > 8) {
+    if(num_of_bits > 8 || num_of_bits == 0) {
         return -3;
     }
+    if(buffer_size_byte < 1) {
+        return -5;
+    }
     *res = 0x00;
+    size_t bytes_read = 0;
+    
+    /* If the bytes_head == NULL, we need to initiate the state. */
+    if(decom_state->bytes_head == NULL) {
+        decom_state->bytes_head = buffer;
+        bytes_read = fread(buffer, sizeof(uint8_t), buffer_size_byte, stream);
+        if(bytes_read == 0) {
+            return -7;
+        }
+        decom_state->stream_bytes_total += bytes_read;
+        decom_state->stream_bytes_curr = 0;
+        decom_state->curr_bits_offset = 0;
+        decom_state->curr_byte = 0;
+    }
+
     uint8_t initial = 0xFF;
-    uint8_t this_byte = decomp_state->bytes_head[decomp_state->curr_byte];
-    uint8_t bit_offs = decomp_state->curr_bits_offset;
+    uint8_t this_byte = buffer[decom_state->curr_byte];
+    uint8_t bit_offs = decom_state->curr_bits_offset;
+    uint8_t next_byte = 0;
+    uint8_t next_byte_bits = 0;
+
+    if((bit_offs + num_of_bits) >=8 && decom_state->curr_byte == (buffer_size_byte - 1)) {
+        bytes_read = fread(buffer, sizeof(uint8_t), buffer_size_byte, stream);
+        if(bytes_read == 0) {
+            return -11;
+        }
+        next_byte_bits = (num_of_bits + bit_offs) % 8;
+        next_byte = buffer[0];
+        *res = (((initial >> bit_offs) & this_byte) << next_byte_bits) | (next_byte >> (8 - next_byte_bits));
+        decom_state->curr_byte = 0;
+        decom_state->curr_bits_offset = next_byte_bits;
+        decom_state->stream_bytes_curr += buffer_size_byte;
+        decom_state->stream_bytes_total += bytes_read;
+        return 0;
+    }
 
     if((bit_offs + num_of_bits) < 8) {
-        *res = ((initial >> (bit_offs + 1)) & this_byte) >> (7 - bit_offs - num_of_bits);
-        decomp_state->curr_bits_offset += num_of_bits;
+        *res = ((initial >> bit_offs) & this_byte) >> (8 - bit_offs - num_of_bits);
+        decom_state->curr_bits_offset += num_of_bits;
     }
     else {
-        uint8_t next_byte = decomp_state->bytes_head[decomp_state->curr_byte + 1];
-        uint8_t next_byte_bits = num_of_bits + bit_offs - 7;
-        *res = (((initial >> (bit_offs + 1)) & this_byte) << next_byte_bits) | (next_byte >> (8-next_byte_bits));
-        decomp_state->curr_byte++;
-        decomp_state->curr_bits_offset = bit_offs + num_of_bits - 8;
+        next_byte_bits = (num_of_bits + bit_offs) % 8;
+        next_byte = buffer[decom_state->curr_byte + 1];
+        *res = (((initial >> bit_offs) & this_byte) << next_byte_bits) | (next_byte >> (8 - next_byte_bits));
+        decom_state->curr_byte++;
+        decom_state->curr_bits_offset = (bit_offs + num_of_bits) % 8;
     }
     return 0;
 }
@@ -88,7 +139,7 @@ int append_comp_byte(struct bcomp_state *comp_state, uint8_t byte, uint8_t high_
     if(comp_state == NULL) {
         return -1;
     }
-    comp_state->total_bits_suffix -= high_bits;
+    comp_state->total_bits += high_bits;
     if(comp_state->curr_bits_suffix == 0) {
         comp_state->curr_byte++;
         comp_state->bytes[comp_state->curr_byte] = byte;
@@ -110,13 +161,26 @@ int append_comp_byte(struct bcomp_state *comp_state, uint8_t byte, uint8_t high_
 }
 
 /* The bcomp_state must have at least 258 bytes. */
-int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bcomp_state *comp_state, uint16_t *bcomp_bits) {
-    if(state == NULL || comp_state == NULL || bcomp_bits == NULL) {
+int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bcomp_state *comp_state) {
+    if(state == NULL || comp_state == NULL) {
         return -1;
     }
-    if(raw_bytes == 0 || raw_bytes > FULL_STATE_BYTES) {
+    if(raw_bytes > FULL_STATE_BYTES) {
         return -3;
     }
+    
+    memset(comp_state->bytes, 0, 257 * sizeof(uint8_t));
+    comp_state->curr_bits_suffix = 8;
+    comp_state->curr_byte = 0;
+    comp_state->total_bits = 0;
+    comp_state->io_end = 0;
+
+    if(raw_bytes == 0) {
+        append_comp_byte(comp_state, (uint8_t)0x00, 8);
+        comp_state->io_end = 1;
+        return 0;
+    }
+
     uint16_t raw_bits = raw_bytes * 8;
     struct freq_matrix frequency[256];
     uint16_t top2_freqs = 0, top4_freqs = 0, top6_freqs = 0, top2_6_freqs = 0;
@@ -126,16 +190,16 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
     uint8_t comp_method = 0, dict_elem_code = 0;
     const uint8_t num_dict_elems[4] = {2, 4, 6, 6};
     const uint8_t dict_elem_size[4][3] = {
-        1, 4, 8,
-        2, 4, 8,
-        3, 6, 8,
-        3, 6, 8
+        {1, 4, 8},
+        {2, 4, 8},
+        {3, 6, 8},
+        {3, 6, 8}
     };
     const uint8_t dict_total_size[4][3] = {
-        2,  8,  16,
-        8,  16, 32,
-        18, 36, 48,
-        18, 36, 48
+        {2,  8,  16},
+        {8,  16, 32},
+        {18, 36, 48},
+        {18, 36, 48}
     };
 
     /* 0xFF is illegal. */
@@ -143,13 +207,6 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
 
     uint16_t i = 0;
     uint8_t header = 0x00;
-
-    *bcomp_bits = raw_bytes * 8 + 1;
-
-    memset(comp_state->bytes, 0, 257 * sizeof(uint8_t));
-    comp_state->curr_bits_suffix = 8;
-    comp_state->curr_byte = 0;
-    comp_state->total_bits_suffix = 2056;
 
     for(i = 0; i < 256; i++) {
         frequency[i].index = i;
@@ -168,7 +225,6 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
     index_max_2 = GET_MAX(frequency[0].index, frequency[1].index);
     index_max_4 = GET_MAX(GET_MAX(frequency[2].index, frequency[3].index), index_max_2);
     index_max_6 = GET_MAX(GET_MAX(frequency[4].index, frequency[5].index), index_max_4);
-    //printf("index_max: %x %x %x\t::::::::::::::\n", index_max_2, index_max_4, index_max_6);
 
     if(index_max_2 < 0x02) {
         dict_elem_flags[0] = 0;
@@ -203,14 +259,10 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
         dict_elem_flags[3] = 2;
     }
 
-    //printf("%d\t%d\t%d\t%d\t\t%d\n", top2_freqs, top4_freqs, top6_freqs, top2_6_freqs, dict_elem_flags[0]);
-
     comp_bits[0] = 5 + dict_total_size[0][dict_elem_flags[0]] + top2_freqs * 2 + (raw_bytes - top2_freqs) + (raw_bytes - top2_freqs) * 8;
     comp_bits[1] = 5 + dict_total_size[1][dict_elem_flags[1]] + top4_freqs * 3 + (raw_bytes - top4_freqs) + (raw_bytes - top4_freqs) * 8;
     comp_bits[2] = 5 + dict_total_size[2][dict_elem_flags[2]] + top2_freqs * 3 + top2_6_freqs *4 + (raw_bytes - top6_freqs) + (raw_bytes - top6_freqs) * 8;
     comp_bits[3] = 5 + dict_total_size[3][dict_elem_flags[3]] + top6_freqs * 4 + (raw_bytes - top6_freqs) + (raw_bytes - top6_freqs) * 8;
-
-    //printf("%d\t%d\t%d\t%d\n", comp_bits[0], comp_bits[1], comp_bits[2], comp_bits[3]);
 
     if(comp_bits[0] >= raw_bits && comp_bits[1] >= raw_bits && comp_bits[2] >= raw_bits && comp_bits[3] >= raw_bits) {
         header = 0x00;
@@ -220,8 +272,9 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
         }
         if(raw_bytes != FULL_STATE_BYTES) {
             append_comp_byte(comp_state, (uint8_t)raw_bytes, 8);
+            comp_state->io_end = 1;
         }
-        return 0;
+        return 1;
     }
 
     comp_bits_min = comp_bits[0];
@@ -234,13 +287,12 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
         }
     }
     
-    *bcomp_bits = comp_bits_min;
     header = (0x80) | (comp_method << 5) | (dict_elem_code << 3);
     /* Paddle the header */
     append_comp_byte(comp_state, header, 5);
     uint8_t dict_elem_bits = dict_elem_size[comp_method][dict_elem_code];
     uint8_t dict_elem_left = 8 - dict_elem_bits;
-    uint8_t freq_pos = 0;
+    int8_t freq_pos = 0;
     uint8_t compressed_byte;
     /* Paddle the dictionary */
     for(i = 0; i < num_dict_elems[comp_method]; i++) {
@@ -276,128 +328,257 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
     }
     if(raw_bytes != FULL_STATE_BYTES) {
         append_comp_byte(comp_state, (uint8_t)raw_bytes, 8);
+        comp_state->io_end = 1;
     }
-    return 1;
+    return 2;
 }
 
-int decompression_core(const uint8_t *decomp_state_head, const uint16_t orig_bytes, const uint8_t bit_offset, uint8_t state[]){
-    if(decomp_state_head == NULL || bit_offset > 7 || state == NULL || orig_bytes > FULL_STATE_BYTES) {
+int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte, const uint64_t file_size, const uint8_t file_tail[]){
+    if(stream == NULL || target == NULL || file_size < 3 || file_tail == NULL || buffer_size_byte < 64) {
         return -1;
     }
+
     uint16_t i = 0;
-    if(((*decomp_state_head) & (0x80 >> bit_offset)) == 0) {
-        for(i = 0; i < orig_bytes; i++) {
-            state[i] = decomp_state_head[i] << (bit_offset + 1) | decomp_state_head[i+1] >> (7 - bit_offset);
-        }
-        return 0;
-    }
+    uint16_t last_buffer_size = (file_tail[3] == 0) ? 256 : file_tail[3];
+    uint64_t last_state_pos = ((int64_t)(file_size - last_buffer_size - 3) > 0) ? (file_size - last_buffer_size - 3) : 0;
+    
+    uint16_t state_orig_bytes = 0;
+    uint8_t tail_offset = file_tail[2];
+    uint8_t last_state_orig_bytes = file_tail[0] << tail_offset | file_tail[1] >> (8 - tail_offset);
+    uint8_t comp_flag = 0;
+    uint8_t state_buffer[FULL_STATE_BYTES] = {0x00, };
+    struct decomp_state decom_state;
+    memset(&decom_state, 0, sizeof(struct decomp_state));
+
     const uint8_t num_dict_elems[4] = {2, 4, 6, 6};
     const uint8_t dict_elem_size[4][3] = {
-        1, 4, 8,
-        2, 4, 8,
-        3, 6, 8,
-        3, 6, 8
+        {1, 4, 8},
+        {2, 4, 8},
+        {3, 6, 8},
+        {3, 6, 8}
     };
-    const uint8_t dict_total_size[4][3] = {
-        2,  8,  16,
-        8,  16, 32,
-        18, 36, 48,
-        18, 36, 48
-    };
-
     const uint8_t comp_byte_size[4] = {1, 2, 0xFF, 3};
     uint8_t dict_elems[6] = {0x00,};
     uint8_t dict_elem_index = 0;
     uint8_t byte_comp_flag = 0;
     uint8_t comp_method = 0, dict_elem_code = 0;
-    
-    struct decomp_state decom_state;
-    decom_state.bytes_head = decomp_state_head;
-    decom_state.curr_byte = 0;
-    decom_state.curr_bits_offset = bit_offset;
 
-    if(get_next_bits(&decom_state, 2, &comp_method) < 0) {
+    uint8_t *buffer = (uint8_t *)calloc(buffer_size_byte, sizeof(uint8_t));
+    if(buffer == NULL) {
         return -3;
     }
-    if(get_next_bits(&decom_state, 2, &dict_elem_code) < 0) {
-        return -3;
-    }
-    
-    for( i = 0; i < num_dict_elems[comp_method]; i++) {
-        if(get_next_bits(&decom_state, dict_elem_size[comp_method][dict_elem_code], dict_elems + i) < 0) {
-            return -3;
-        }
-    }
-
-    for(i = 0; i < orig_bytes; i++){
-        if(get_next_bits(&decom_state, 1, &byte_comp_flag) < 0) {
-            return -3;
-        }
-        if(byte_comp_flag == 0) {
-            if(get_next_bits(&decom_state, 8, state + i) < 0) {
-                return -3;
-            }
+    while(1) {
+        get_next_bits(buffer, buffer_size_byte, 1, &comp_flag, &decom_state, stream);
+        if((decom_state.stream_bytes_curr + decom_state.curr_byte) > last_state_pos) {
+            state_orig_bytes = last_state_orig_bytes;
         }
         else {
-            if(comp_method == 2) {
-                if(get_next_bits(&decom_state, 1, &byte_comp_flag) < 0) {
-                    return -3;
-                }
-                if(byte_comp_flag == 0) {
-                    if(get_next_bits(&decom_state, 1, &dict_elem_index) < 0) {
-                        return -3;
-                    }
-                }
-                else {
-                    if(get_next_bits(&decom_state, 2, &dict_elem_index) < 0) {
-                        return -3;
-                    }
-                    dict_elem_index += 2;
-                }
-                state[i] = dict_elems[dict_elem_index];
+            state_orig_bytes = FULL_STATE_BYTES;
+        }
+        if(state_orig_bytes == 0) {
+            free(buffer);
+            return 0;
+        }
+        if(comp_flag == 0) {
+            memset(state_buffer, 0, FULL_STATE_BYTES);
+            for(i = 0; i < state_orig_bytes; i++) {
+                get_next_bits(buffer, buffer_size_byte, 8, state_buffer + i, &decom_state, stream);
+            }
+            fwrite(state_buffer, sizeof(uint8_t), state_orig_bytes, target);
+            if(state_orig_bytes < FULL_STATE_BYTES) {
+                free(buffer);
+                return 0;
+            }
+            continue;
+        }
+        get_next_bits(buffer, buffer_size_byte, 2, &comp_method, &decom_state, stream);
+        get_next_bits(buffer, buffer_size_byte, 2, &dict_elem_code, &decom_state, stream);
+
+        for(i = 0; i < num_dict_elems[comp_method]; i++) {
+            get_next_bits(buffer, buffer_size_byte, dict_elem_size[comp_method][dict_elem_code], dict_elems + i, &decom_state, stream);
+        }
+        memset(state_buffer, 0, FULL_STATE_BYTES);
+        for(i = 0; i < state_orig_bytes; i++) {
+            get_next_bits(buffer, buffer_size_byte, 1, &byte_comp_flag, &decom_state, stream);
+            if(byte_comp_flag == 0) {
+                get_next_bits(buffer, buffer_size_byte, 8, state_buffer + i, &decom_state, stream);
             }
             else {
-                if(get_next_bits(&decom_state, comp_byte_size[comp_method], &dict_elem_index) < 0) {
-                    return -3;
+                if(comp_method == 2) {
+                    get_next_bits(buffer, buffer_size_byte, 1, &byte_comp_flag, &decom_state, stream);
+                    if(byte_comp_flag == 0) {
+                        get_next_bits(buffer, buffer_size_byte, 1, &dict_elem_index, &decom_state, stream);
+                    }
+                    else {
+                        get_next_bits(buffer, buffer_size_byte, 2, &dict_elem_index, &decom_state, stream);
+                        dict_elem_index += 2;
+                    }
+                    state_buffer[i] = dict_elems[dict_elem_index];
                 }
-                state[i] = dict_elems[dict_elem_index];
+                else {
+                    get_next_bits(buffer, buffer_size_byte, comp_byte_size[comp_method], &dict_elem_index, &decom_state, stream);
+                    state_buffer[i] = dict_elems[dict_elem_index];
+                }
             }
+        }
+        fwrite(state_buffer, sizeof(uint8_t), state_orig_bytes, target);
+        if(state_orig_bytes < FULL_STATE_BYTES) {
+            free(buffer);
+            return 0;
         }
     }
     return 0;
 }
 
-int main(int argc, char **argv) {
-    uint8_t state[256] = {0x00,};
-    uint8_t decompressed[256] = {0x00,};
-    uint16_t i;
-    for(i = 0; i < 256; i++) {
-        state[i] = i % 6 + 20;
+int padding_comp_obuffer(const struct bcomp_state *comp_state, struct bcomp_obuffer *output_buffer) {
+    if(comp_state == NULL || output_buffer == NULL) {
+        return -1;
     }
-    printf("INPUT: %d bits\n", 2048);
-    for(i = 0; i < 256; i++) {
-        printf("%x ", state[i]);
+    memset(output_buffer->bytes_array, 0, 257 * sizeof(uint8_t));
+    output_buffer->io_end = comp_state->io_end;
+    output_buffer->bytes_valid = 0;
+    //uint8_t initial = 0xFF;
+    uint16_t i = 0;
+
+    uint8_t tail_byte_prev = output_buffer->prev_tail; 
+    uint8_t tail_bits_prev = output_buffer->prev_tail_high_bits;
+    uint16_t total_bits = tail_bits_prev + comp_state->total_bits;
+    uint8_t tail_bits_new = total_bits % 8;
+    uint16_t total_bytes = total_bits / 8;
+
+    output_buffer->bytes_array[0] = tail_byte_prev | (comp_state->bytes[0] >> tail_bits_prev);
+    i++;
+
+    while(i < total_bytes) {
+        output_buffer->bytes_array[i] = (comp_state->bytes[i-1] << (8 - tail_bits_prev)) | (comp_state->bytes[i] >> tail_bits_prev);
+        i++;
     }
-    putchar('\n');
-    putchar('\n');
-    uint16_t bcomp_bits = 0;
-    struct bcomp_state state_out;
 
-    compress_core(state, 256, &state_out, &bcomp_bits);
-
-    printf("COMPRESSED: %d bits\n", bcomp_bits);
-    for(i = 0; i < 257; i++) {
-        printf("%x ", state_out.bytes[i]);
+    output_buffer->prev_tail_high_bits = tail_bits_new;
+    output_buffer->bytes_valid = total_bytes;
+    if(output_buffer->io_end == 0) {
+        output_buffer->prev_tail = (comp_state->bytes[i-1] << (8 - tail_bits_prev)) | (comp_state->bytes[i] >> tail_bits_prev);
     }
-    putchar('\n');
-    putchar('\n');
-
-    decompression_core(state_out.bytes, 256, 0, decompressed);
-
-    printf("DECOMPRESSED\n");
-    for(i = 0; i < 256; i++) {
-        printf("%x ", decompressed[i]);
+    else {
+        output_buffer->bytes_array[i] = (comp_state->bytes[i-1] << (8 - tail_bits_prev)) | (comp_state->bytes[i] >> tail_bits_prev);
+        output_buffer->bytes_valid++;
     }
-    putchar('\n');
     return 0;
+}
+
+int fwrite_comp(FILE *file_p, const struct bcomp_obuffer *output_buffer) {
+    if(file_p == NULL) {
+        return -1;
+    }
+    if(fwrite(output_buffer->bytes_array, sizeof(uint8_t), output_buffer->bytes_valid, file_p) != output_buffer->bytes_valid) {
+        fclose(file_p);
+        return -3;
+    }
+    if(output_buffer->io_end) {
+        uint8_t last_state_byte = (uint8_t)(output_buffer->bytes_valid);
+        fwrite(&(output_buffer->prev_tail_high_bits), sizeof(uint8_t), 1, file_p);
+        fwrite(&last_state_byte, sizeof(uint8_t), 1, file_p);
+        fclose(file_p);
+        return 1;
+    }
+    return 0; /* Keep file_p open. */
+}
+
+int file_bcomp(const char *source, const char *target) {
+    FILE* filep_s = fopen(source, "rb");
+    if(filep_s == NULL) {
+        return -1;
+    }
+    FILE *filep_t = fopen(target, "wb+");
+    if(filep_t == NULL) {
+        fclose(filep_s);
+        return -3;
+    }
+
+    uint8_t ingest_buffer[FULL_STATE_BYTES] = {0x00, };
+    struct bcomp_state comp_state;
+    struct bcomp_obuffer output_buffer;
+    int8_t err_flag = 0, fwrite_flag = 0;
+    memset(&comp_state, 0, sizeof(struct bcomp_state));
+    memset(&output_buffer, 0, sizeof(struct bcomp_obuffer));
+    size_t bytes_read = 0;
+    while(1) {
+        bytes_read = fread(&ingest_buffer, sizeof(uint8_t), FULL_STATE_BYTES, filep_s);
+        if(compress_core(ingest_buffer, bytes_read, &comp_state) < 0) {
+            err_flag = -5;
+            goto close_and_return;
+        }
+        if(padding_comp_obuffer(&comp_state, &output_buffer) != 0) {
+            err_flag = -7;
+            goto close_and_return;
+        }
+        fwrite_flag = fwrite_comp(filep_t, &output_buffer);
+        if(fwrite_flag < 0) {
+            err_flag = -9;
+            goto close_and_return;
+        }
+        else if(fwrite_flag == 1) {
+            fclose(filep_s);
+            return 0;
+        }
+        if(bytes_read != FULL_STATE_BYTES) {
+            goto close_and_return;
+        }
+    }
+close_and_return:
+    fclose(filep_s);
+    fclose(filep_t);
+    return err_flag;
+}
+
+
+int file_bcomp_decomp(const char *source, const char *target) {
+    FILE* filep_s = fopen(source, "rb");
+    if(filep_s == NULL) {
+        return -1;
+    }
+    FILE *filep_t = fopen(target, "wb+");
+    if(filep_t == NULL) {
+        fclose(filep_s);
+        return -3;
+    }
+    uint8_t tail_info[4] = {0x00, };
+    uint64_t read_buffer_size = 0;
+    fseeko(filep_s, -4, SEEK_END);
+    int64_t file_size = ftello(filep_s) + 4;
+    if(fread(tail_info, sizeof(uint8_t), 4, filep_s) != 4) {
+        return -5;
+    }
+    rewind(filep_s);
+
+    if(file_size > 0x10000) {
+        read_buffer_size = 8192;
+    }
+    else {
+        read_buffer_size = 1024;
+    }
+    int err_flag = file_decomp_core(filep_s, filep_t, read_buffer_size, file_size, tail_info);
+    fclose(filep_s);
+    fclose(filep_t);
+    if(err_flag != 0 && err_flag != 1) {
+        return -err_flag;
+    }
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if(argc < 2) {
+        printf("Please specify original file as argv[1].\n");
+        return 1;
+    }
+    char comp_path[1024] = "";
+    char decomp_path[1024] = "";
+    snprintf(comp_path, 1024, "%s.bcomp", argv[1]);
+    snprintf(decomp_path, 1024, "%s.dcomp", argv[1]);
+    int run_flag = file_bcomp(argv[1], comp_path);
+    printf("Compression done to %s ! Res: %d\n", comp_path, run_flag);
+    run_flag = file_bcomp_decomp(comp_path, decomp_path);
+    printf("Decompression done to %s ! Res: %d\n", decomp_path, run_flag);
+    return 0;
+
 }
