@@ -566,19 +566,35 @@ int file_bcomp_decomp(const char *source, const char *target) {
     return 0;
 }
 
+void print_help(void) {
+    printf("Error:   Please specify option, source and target path.\n");
+    printf("Usage:   bcomp OPTION SOURCE_FILE TARGET_FILE.\n");
+    printf("         OPTION:    -c    Compress the source file to target file.\n");
+    printf("                    -d    Decompress the source file to target file.\n");
+    printf("Example: ./bcomp -c foo.txt bar.bcmp\n");
+    printf("Repository: https://github.com/zhenrong-wang/bcomp \n");
+}
+
 int main(int argc, char **argv) {
-    if(argc < 2) {
-        printf("Please specify original file as argv[1].\n");
+    if(argc < 4) {
+        print_help();
         return 1;
     }
-    char comp_path[1024] = "";
-    char decomp_path[1024] = "";
-    snprintf(comp_path, 1024, "%s.bcomp", argv[1]);
-    snprintf(decomp_path, 1024, "%s.dcomp", argv[1]);
-    int run_flag = file_bcomp(argv[1], comp_path);
-    printf("Compression done to %s ! Res: %d\n", comp_path, run_flag);
-    run_flag = file_bcomp_decomp(comp_path, decomp_path);
-    printf("Decompression done to %s ! Res: %d\n", decomp_path, run_flag);
+    if(strcmp(argv[1], "-c") != 0 && strcmp(argv[1], "-d") != 0) {
+        print_help();
+        return 3;
+    }
+    int run_flag = 0;
+    char comp_filename[2048] = "";
+    snprintf(comp_filename, 2048, "%s.bc", argv[2]);
+    if(strcmp(argv[1], "-c") == 0) {
+        run_flag = file_bcomp(argv[1], comp_filename);
+        printf("INFO: Compressed file %s to %s . Return Val: %d.\n", argv[1], comp_filename, run_flag);
+    }
+    else {
+        run_flag = file_bcomp_decomp(argv[2], argv[1]);
+        printf("INFO: Decompressed file %s to %s . Return Val: %d.\n", argv[1], argv[2], run_flag);
+    }
+    printf("Repository: https://github.com/zhenrong-wang/bcomp \n");
     return 0;
-
 }
