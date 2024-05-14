@@ -586,14 +586,14 @@ int main(int argc, char **argv) {
     }
     int run_flag = 0;
     char comp_filename[2048] = "";
-    snprintf(comp_filename, 2048, "%s.bc", argv[2]);
+    snprintf(comp_filename, 2048, "%s.bc", argv[3]);
     if(strcmp(argv[1], "-c") == 0) {
-        run_flag = file_bcomp(argv[1], comp_filename);
-        printf("INFO: Compressed file %s to %s . Return Val: %d.\n", argv[1], comp_filename, run_flag);
+        run_flag = file_bcomp(argv[2], comp_filename);
+        printf("INFO: Compressed file %s to %s . Return Val: %d.\n", argv[2], comp_filename, run_flag);
     }
     else {
-        run_flag = file_bcomp_decomp(argv[2], argv[1]);
-        printf("INFO: Decompressed file %s to %s . Return Val: %d.\n", argv[1], argv[2], run_flag);
+        run_flag = file_bcomp_decomp(argv[2], argv[3]);
+        printf("INFO: Decompressed file %s to %s . Return Val: %d.\n", argv[2], argv[3], run_flag);
     }
     printf("Repository: https://github.com/zhenrong-wang/bcomp \n");
     return 0;
