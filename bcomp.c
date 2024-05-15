@@ -599,7 +599,7 @@ int file_bcomp_decomp(const char *source, const char *target) {
     fseeko(filep_s, -4, SEEK_END);
     int64_t file_size = ftello(filep_s) + 4;
     if(fread(tail_info, sizeof(uint8_t), 4, filep_s) != 4) {
-        return -5;
+        return INVALID_TAIL_INFO;
     }
     rewind(filep_s);
     if(file_size > 0x10000) {
