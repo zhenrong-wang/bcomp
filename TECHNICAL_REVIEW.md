@@ -1,4 +1,4 @@
-# TR: BCOMP - A Simple, Possible Algorithm of Lossless Compression
+# TR: BCOMP - A Simple Algorithm of Lossless Compression
 
 [Author: Zhenrong WANG](https://github.com/zhenrong-wang)
 
@@ -62,6 +62,7 @@ Let's use:
 We can use either method of the 4:
 
 - A. Compress the `Top[2]` bytes to 1 bit. Leave the others as 8 bits.
+- A-sub. If the state contains only 1 unique byte, e.g. `0xFA 0xFA 0xFA 0xFA ...`, we just record the byte. 
 - B. Compress the `Top[4]` bytes to 2 bits. Leave the others as 8 bits.
 - C. Compress the `Top[2]` bytes to 1 bit, compress the `Top[2, 6]`to 2 bits. Leave the others as 8 bits.
 - D. Compress the `Top[6]` bytes to 3 bits. Leave the others as 8 bits.
@@ -89,6 +90,7 @@ Method  METHOD  DICT_ELEM_SIZE  #Elems_of_dict  Elem_size   Dict_length
 A       00      00              2               1           2
 A       00      01              2               4           8
 A       00      10              2               8           16
+A       00      11              1               8           8 *This is A-sub Method
 
 B       01      00              4               2           8
 B       01      01              4               4           16
@@ -112,6 +114,7 @@ For compressible bytes (high-frequency bytes recorded in the dictionary), we put
 ```
 Method  METHOD  COMPRESSED_BITS_WITH_HEADER
 A       00      2
+A-sub   00      0 *A-sub is quite good but not ordinarily happen
 B       01      3
 C       10      3 for Top(2), 4 for Top(2,6)
 D       11      4
