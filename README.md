@@ -1,7 +1,7 @@
 # bcomp
 A simple algorithm for lossless compression.
 
-This program focuses on a new lossless compression method. It is new to the world, therefor, it might be buggy.
+This program focuses on a new lossless compression method. It is new to the world, therefore, it might be buggy.
 
 Please feel free to clone, fork, and test. Contributions are highly appreciated.
 
