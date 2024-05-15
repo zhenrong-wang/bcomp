@@ -27,6 +27,7 @@
 #define INVALID_HEADER_FLAG     127
 #define INVALID_TAIL_INFO       125
 #define INVALID_FILE_TO_DECOMP  123
+#define FILE_IO_ERROR           121
 
 struct freq_matrix {
     uint8_t index;
@@ -591,12 +592,7 @@ close_and_return:
 int file_bcomp_decomp(const char *source, const char *target) {
     FILE* filep_s = fopen(source, "rb");
     if(filep_s == NULL) {
-        return -1;
-    }
-    FILE *filep_t = fopen(target, "wb+");
-    if(filep_t == NULL) {
-        fclose(filep_s);
-        return -3;
+        return FILE_IO_ERROR;
     }
     uint8_t tail_info[4] = {0x00, };
     uint64_t read_buffer_size = 0;
@@ -606,7 +602,6 @@ int file_bcomp_decomp(const char *source, const char *target) {
         return -5;
     }
     rewind(filep_s);
-
     if(file_size > 0x10000) {
         read_buffer_size = 8192;
     }
@@ -615,13 +610,16 @@ int file_bcomp_decomp(const char *source, const char *target) {
     }
     if(file_size < COMP_FILE_MIN_SIZE) {
         fclose(filep_s);
-        fclose(filep_t);
         return INVALID_FILE_TO_DECOMP;
     }
     if(tail_info[2] > 7) {
         fclose(filep_s);
-        fclose(filep_t);
         return INVALID_TAIL_INFO;
+    }
+    FILE *filep_t = fopen(target, "wb+");
+    if(filep_t == NULL) {
+        fclose(filep_s);
+        return FILE_IO_ERROR;
     }
     int err_flag = file_decomp_core(filep_s, filep_t, read_buffer_size, file_size, tail_info);
     fclose(filep_s);
