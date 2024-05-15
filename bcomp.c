@@ -305,13 +305,13 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
     }
     
     header = (0x80) | (comp_method << 5) | (dict_elem_code << 3);
-    /* Paddle the header */
+    /* Padding the header */
     append_comp_byte(comp_state, header, 5);
     uint8_t dict_elem_bits = dict_elem_size[comp_method][dict_elem_code];
     uint8_t dict_elem_left = 8 - dict_elem_bits;
     int8_t freq_pos = 0;
     uint8_t compressed_byte;
-    /* Paddle the dictionary */
+    /* Padding the dictionary */
     for(i = 0; i < num_dict_elems[comp_method]; i++) {
         append_comp_byte(comp_state, frequency[i].index << dict_elem_left, dict_elem_bits);
     }
