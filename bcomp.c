@@ -207,6 +207,7 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
 
     uint16_t i = 0;
     uint8_t header = 0x00;
+    uint8_t unique_dict_elem = 0x00;
 
     for(i = 0; i < 256; i++) {
         frequency[i].index = i;
@@ -216,6 +217,22 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
         frequency[state[i]].freq++;
     }
     qsort(frequency, 256, sizeof(struct freq_matrix), compare);
+    
+    if(frequency[0].freq == raw_bytes) {
+        comp_method = 0;
+        dict_elem_code = 3;
+        unique_dict_elem = frequency[0].index;
+
+        header = (0x80) | (comp_method << 5) | (dict_elem_code << 3);
+        append_comp_byte(comp_state, header, 5);
+        append_comp_byte(comp_state, unique_dict_elem, 8);
+        
+        if(raw_bytes != FULL_STATE_BYTES) {
+            append_comp_byte(comp_state, (uint8_t)raw_bytes, 8);
+            comp_state->io_end = 1;
+        }
+        return 1;
+    }
 
     top2_freqs = frequency[0].freq + frequency[1].freq;
     top4_freqs = top2_freqs + frequency[2].freq + frequency[3].freq;
@@ -274,7 +291,7 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
             append_comp_byte(comp_state, (uint8_t)raw_bytes, 8);
             comp_state->io_end = 1;
         }
-        return 1;
+        return 2;
     }
 
     comp_bits_min = comp_bits[0];
@@ -330,7 +347,7 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
         append_comp_byte(comp_state, (uint8_t)raw_bytes, 8);
         comp_state->io_end = 1;
     }
-    return 2;
+    return 3;
 }
 
 int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte, const uint64_t file_size, const uint8_t file_tail[]){
@@ -362,19 +379,19 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
     uint8_t dict_elem_index = 0;
     uint8_t byte_comp_flag = 0;
     uint8_t comp_method = 0, dict_elem_code = 0;
-
     uint8_t *buffer = (uint8_t *)calloc(buffer_size_byte, sizeof(uint8_t));
     if(buffer == NULL) {
         return -3;
     }
     while(1) {
         get_next_bits(buffer, buffer_size_byte, 1, &comp_flag, &decom_state, stream);
-        if((decom_state.stream_bytes_curr + decom_state.curr_byte) > last_state_pos) {
+        if((decom_state.stream_bytes_curr + decom_state.curr_byte) >= last_state_pos) {
             state_orig_bytes = last_state_orig_bytes;
         }
         else {
             state_orig_bytes = FULL_STATE_BYTES;
         }
+        //printf("%d ==========\n", state_orig_bytes);
         if(state_orig_bytes == 0) {
             free(buffer);
             return 0;
@@ -393,6 +410,20 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         }
         get_next_bits(buffer, buffer_size_byte, 2, &comp_method, &decom_state, stream);
         get_next_bits(buffer, buffer_size_byte, 2, &dict_elem_code, &decom_state, stream);
+        if(comp_method == 0 && dict_elem_code == 3) {
+            memset(state_buffer, 0, FULL_STATE_BYTES);
+            uint8_t unique_dict_elem = 0;
+            get_next_bits(buffer, buffer_size_byte, 8, &unique_dict_elem, &decom_state, stream);
+            for(i = 0; i < state_orig_bytes; i++) {
+                state_buffer[i] = unique_dict_elem;
+            }
+            fwrite(state_buffer, sizeof(uint8_t), state_orig_bytes, target);
+            if(state_orig_bytes < FULL_STATE_BYTES) {
+                free(buffer);
+                return 0;
+            }
+            continue;
+        }
 
         for(i = 0; i < num_dict_elems[comp_method]; i++) {
             get_next_bits(buffer, buffer_size_byte, dict_elem_size[comp_method][dict_elem_code], dict_elems + i, &decom_state, stream);
