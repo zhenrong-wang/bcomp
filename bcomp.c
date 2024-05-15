@@ -18,11 +18,15 @@
 #define GET_MAX(a,b) (((a) > (b)) ? a : b)
 #define GET_MIN(a,b) (((a) < (b)) ? a : b)
 
-#define FULL_STATE_BYTES 256
-#define DECOMP_INGEST_BYTES 1024
-
-/* For test purpose. */
-#define TEST_FILE_SIZE 9
+#define FULL_STATE_BYTES        256
+#define DECOMP_INGEST_BYTES     1024
+#define COMP_METHOD_MAX         3
+#define DICT_ELEM_CODE_MAX_A    3  
+#define DICT_ELEM_CODE_MAX_BCD  2
+#define COMP_FILE_MIN_SIZE      4
+#define INVALID_HEADER_FLAG     127
+#define INVALID_TAIL_INFO       125
+#define INVALID_FILE_TO_DECOMP  123
 
 struct freq_matrix {
     uint8_t index;
@@ -350,6 +354,23 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
     return 3;
 }
 
+int check_header_validity(const uint8_t comp_method, const uint8_t dict_elem_code) {
+    if(comp_method > COMP_METHOD_MAX) {
+        return INVALID_HEADER_FLAG;
+    }
+    if(comp_method == 0) {
+        if(dict_elem_code > DICT_ELEM_CODE_MAX_A) {
+            return INVALID_HEADER_FLAG;
+        }
+    }
+    else {
+        if(dict_elem_code > DICT_ELEM_CODE_MAX_BCD) {
+            return INVALID_HEADER_FLAG;
+        }
+    }
+    return 0;
+}
+
 int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte, const uint64_t file_size, const uint8_t file_tail[]){
     if(stream == NULL || target == NULL || file_size < 3 || file_tail == NULL || buffer_size_byte < 64) {
         return -1;
@@ -410,6 +431,10 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         }
         get_next_bits(buffer, buffer_size_byte, 2, &comp_method, &decom_state, stream);
         get_next_bits(buffer, buffer_size_byte, 2, &dict_elem_code, &decom_state, stream);
+        if(check_header_validity(comp_method, dict_elem_code) == INVALID_HEADER_FLAG) {
+            free(buffer);
+            return INVALID_HEADER_FLAG;
+        }
         if(comp_method == 0 && dict_elem_code == 3) {
             memset(state_buffer, 0, FULL_STATE_BYTES);
             uint8_t unique_dict_elem = 0;
@@ -588,9 +613,22 @@ int file_bcomp_decomp(const char *source, const char *target) {
     else {
         read_buffer_size = 1024;
     }
+    if(file_size < COMP_FILE_MIN_SIZE) {
+        fclose(filep_s);
+        fclose(filep_t);
+        return INVALID_FILE_TO_DECOMP;
+    }
+    if(tail_info[2] > 7) {
+        fclose(filep_s);
+        fclose(filep_t);
+        return INVALID_TAIL_INFO;
+    }
     int err_flag = file_decomp_core(filep_s, filep_t, read_buffer_size, file_size, tail_info);
     fclose(filep_s);
     fclose(filep_t);
+    if(err_flag == INVALID_HEADER_FLAG) {
+        return INVALID_HEADER_FLAG;
+    }
     if(err_flag != 0 && err_flag != 1) {
         return -err_flag;
     }
@@ -620,11 +658,16 @@ int main(int argc, char **argv) {
     snprintf(comp_filename, 2048, "%s.bc", argv[3]);
     if(strcmp(argv[1], "-c") == 0) {
         run_flag = file_bcomp(argv[2], comp_filename);
-        printf("INFO: Compressed file %s to %s . Return Val: %d.\n", argv[2], comp_filename, run_flag);
+        printf("INFO: Compressed file %s to %s . Return Value: %d.\n", argv[2], comp_filename, run_flag);
     }
     else {
         run_flag = file_bcomp_decomp(argv[2], argv[3]);
-        printf("INFO: Decompressed file %s to %s . Return Val: %d.\n", argv[2], argv[3], run_flag);
+        if(run_flag != 0) {
+            printf("ERRO: Decompression failed. Error Code: %d.\n", run_flag);
+        }
+        else {
+            printf("INFO: Decompressed file %s to %s .\n", argv[2], argv[3]);
+        }
     }
     printf("Repository: https://github.com/zhenrong-wang/bcomp \n");
     return 0;
