@@ -584,6 +584,7 @@ int file_bcomp(const char *source, const char *target) {
         }
         else if(fwrite_flag == 1) {
             fclose(filep_s);
+            fclose(filep_t);
             return 0;
         }
         if(bytes_read != FULL_STATE_BYTES) {
@@ -607,6 +608,7 @@ int file_bcomp_decomp(const char *source, const char *target) {
     fseeko(filep_s, -4, SEEK_END);
     int64_t file_size = ftello(filep_s) + 4;
     if(fread(tail_info, sizeof(uint8_t), 4, filep_s) != 4) {
+        fclose(filep_s);
         return INVALID_TAIL_INFO;
     }
     rewind(filep_s);
