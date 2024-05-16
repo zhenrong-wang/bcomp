@@ -414,7 +414,6 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         else {
             state_orig_bytes = FULL_STATE_BYTES;
         }
-        printf("%d \n", state_orig_bytes);
         if(state_orig_bytes == 0) {
             free(buffer);
             return 0;
