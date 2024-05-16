@@ -690,6 +690,53 @@ void print_help(void) {
     printf("Repository: https://github.com/zhenrong-wang/bcomp \n");
 }
 
+#if defined fuzz && fuzz == 1
+
+#include <stdio.h>
+#include <string.h>
+
+#define test(x) do{ if(!(x)){ int volatile* volatile ptr; ptr = 0; *ptr = 0; } }while(0)
+
+void fuzz_1(uint8_t const* const data, size_t const size)
+{
+	FILE* f;
+	size_t len;
+	int err;
+	uint8_t buff[8 * 1024];
+
+	f = fopen("data_a.dat", "wb"); test(f);
+	len = fwrite(data, 1, size, f); test(len == size);
+	err = fclose(f); test(err == 0);
+	err = file_bcomp("data_a.dat", "data_b.dat"); test(err == 0);
+	err = file_bcomp_decomp("data_b.dat", "data_c.dat"); test(err == 0);
+	f = fopen("data_c.dat", "rb"); test(f);
+	len = fread(&buff[0], 1, 8 * 1024, f);
+	err = fclose(f); test(err == 0);
+	test(len == size);
+	test(memcmp(&buff[0], data, size) == 0);
+}
+
+void fuzz_2(uint8_t const* const data, size_t const size)
+{
+	FILE* f;
+	size_t len;
+	int err;
+
+	f = fopen("data_d.dat", "wb"); test(f);
+	len = fwrite(data, 1, size, f); test(len == size);
+	err = fclose(f); test(err == 0);
+	err = file_bcomp_decomp("data_d.dat", "data_e.dat"); ((void)(err));
+}
+
+int LLVMFuzzerTestOneInput(uint8_t const* const data, size_t const size)
+{
+	fuzz_1(data, size);
+	fuzz_2(data, size);
+	return 0;
+}
+
+#else
+
 int main(int argc, char **argv) {
     if(argc < 4) {
         print_help();
@@ -718,3 +765,5 @@ int main(int argc, char **argv) {
     printf("Repository: https://github.com/zhenrong-wang/bcomp \n");
     return 0;
 }
+
+#endif
