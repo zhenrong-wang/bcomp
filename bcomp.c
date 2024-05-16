@@ -409,7 +409,7 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
     while(1) {
         uint8_t header_offset = decom_state.curr_bits_offset;
         get_next_bits(buffer, buffer_size_byte, 1, &comp_flag, &decom_state, stream);
-        if((decom_state.stream_bytes_curr + decom_state.curr_byte) >= last_state_pos && header_offset + tail_offset >= 7) {
+        if((decom_state.stream_bytes_curr + decom_state.curr_byte) >= last_state_pos && header_offset + tail_offset == 7) {
             state_orig_bytes = last_state_orig_bytes;
         }
         else {
