@@ -548,16 +548,29 @@ int fwrite_comp(FILE *file_p, const struct bcomp_obuffer *output_buffer) {
 }
 
 int file_bcomp(const char *source, const char *target) {
-    FILE* filep_s = fopen(source, "rb");
+#ifdef _WIN32
+    FILE *filep_s = NULL;
+    FILE *filep_t = NULL;
+    errno_t file_io_flag = fopen_s(&filep_s, source, "rb");
     if(filep_s == NULL) {
-        return -1;
+        return FILE_IO_ERROR;
+    }
+    file_io_flag = fopen_s(&filep_t, target, "wb+");
+    if(filep_t == NULL) {
+        fclose(filep_s);
+        return FILE_IO_ERROR;
+    }
+#else 
+    FILE *filep_s = fopen(source, "rb");
+    if(filep_s == NULL) {
+        return FILE_IO_ERROR;
     }
     FILE *filep_t = fopen(target, "wb+");
     if(filep_t == NULL) {
         fclose(filep_s);
-        return -3;
+        return FILE_IO_ERROR;
     }
-
+#endif
     uint8_t ingest_buffer[FULL_STATE_BYTES] = {0x00, };
     struct bcomp_state comp_state;
     struct bcomp_obuffer output_buffer;
@@ -597,14 +610,27 @@ close_and_return:
 
 
 int file_bcomp_decomp(const char *source, const char *target) {
+#ifdef _WIN32
+    FILE *filep_s = NULL;
+    errno_t file_io_flag = fopen_s(&filep_s, source, "rb");
+    if(filep_s == NULL) {
+        return FILE_IO_ERROR;
+    }
+#else
     FILE* filep_s = fopen(source, "rb");
     if(filep_s == NULL) {
         return FILE_IO_ERROR;
     }
+#endif
     uint8_t tail_info[4] = {0x00, };
     uint64_t read_buffer_size = 0;
+#ifdef _WIN32
+    _fseeki64(filep_s, -4, SEEK_END);
+    int64_t file_size = _ftelli64(filep_s) + 4;
+#else
     fseeko(filep_s, -4, SEEK_END);
     int64_t file_size = ftello(filep_s) + 4;
+#endif
     if(fread(tail_info, sizeof(uint8_t), 4, filep_s) != 4) {
         fclose(filep_s);
         return INVALID_TAIL_INFO;
@@ -624,11 +650,20 @@ int file_bcomp_decomp(const char *source, const char *target) {
         fclose(filep_s);
         return INVALID_TAIL_INFO;
     }
+#ifdef _WIN32
+    FILE *filep_t = NULL;
+    file_io_flag = fopen_s(&filep_t, target, "wb+");
+    if(filep_t == NULL) {
+        fclose(filep_s);
+        return FILE_IO_ERROR;
+    }
+#else
     FILE *filep_t = fopen(target, "wb+");
     if(filep_t == NULL) {
         fclose(filep_s);
         return FILE_IO_ERROR;
     }
+#endif
     int err_flag = file_decomp_core(filep_s, filep_t, read_buffer_size, file_size, tail_info);
     fclose(filep_s);
     fclose(filep_t);
