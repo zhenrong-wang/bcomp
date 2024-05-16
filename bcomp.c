@@ -380,7 +380,7 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
 
     uint16_t i = 0;
     uint16_t last_buffer_size = (file_tail[3] == 0) ? 256 : file_tail[3];
-    uint64_t last_state_pos = ((int64_t)(file_size - last_buffer_size - 3) > 0) ? (file_size - last_buffer_size - 3) : 0;
+    uint64_t last_state_pos = ((int64_t)(file_size - last_buffer_size - 2) > 0) ? (file_size - last_buffer_size - 2) : 0;
     
     uint16_t state_orig_bytes = 0;
     uint8_t tail_offset = file_tail[2];
@@ -408,7 +408,7 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
     }
     while(1) {
         get_next_bits(buffer, buffer_size_byte, 1, &comp_flag, &decom_state, stream);
-        if((decom_state.stream_bytes_curr + decom_state.curr_byte) >= last_state_pos && decom_state.curr_bits_offset >= tail_offset) {
+        if((decom_state.stream_bytes_curr + decom_state.curr_byte) >= last_state_pos) {
             state_orig_bytes = last_state_orig_bytes;
         }
         else {
