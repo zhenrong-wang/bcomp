@@ -536,17 +536,15 @@ int fwrite_comp(FILE *file_p, const struct bcomp_obuffer *output_buffer) {
         return -1;
     }
     if(fwrite(output_buffer->bytes_array, sizeof(uint8_t), output_buffer->bytes_valid, file_p) != output_buffer->bytes_valid) {
-        fclose(file_p);
         return -3;
     }
     if(output_buffer->io_end) {
         uint8_t last_state_byte = (uint8_t)(output_buffer->bytes_valid);
         fwrite(&(output_buffer->prev_tail_high_bits), sizeof(uint8_t), 1, file_p);
         fwrite(&last_state_byte, sizeof(uint8_t), 1, file_p);
-        fclose(file_p);
         return 1;
     }
-    return 0; /* Keep file_p open. */
+    return 0;
 }
 
 int file_bcomp(const char *source, const char *target) {
