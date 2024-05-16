@@ -28,6 +28,7 @@
 #define INVALID_TAIL_INFO       125
 #define INVALID_FILE_TO_DECOMP  123
 #define FILE_IO_ERROR           121
+#define INVALID_DATA_TO_DECOMP  119
 
 struct freq_matrix {
     uint8_t index;
@@ -413,7 +414,6 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         else {
             state_orig_bytes = FULL_STATE_BYTES;
         }
-        //printf("%d ==========\n", state_orig_bytes);
         if(state_orig_bytes == 0) {
             free(buffer);
             return 0;
@@ -470,10 +470,18 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
                         get_next_bits(buffer, buffer_size_byte, 2, &dict_elem_index, &decom_state, stream);
                         dict_elem_index += 2;
                     }
+                    if(dict_elem_index >= num_dict_elems[comp_method]) {
+                        free(buffer);
+                        return INVALID_DATA_TO_DECOMP;
+                    }
                     state_buffer[i] = dict_elems[dict_elem_index];
                 }
                 else {
                     get_next_bits(buffer, buffer_size_byte, comp_byte_size[comp_method], &dict_elem_index, &decom_state, stream);
+                    if(dict_elem_index >= num_dict_elems[comp_method]) {
+                        free(buffer);
+                        return INVALID_DATA_TO_DECOMP;
+                    }
                     state_buffer[i] = dict_elems[dict_elem_index];
                 }
             }
@@ -627,10 +635,15 @@ int file_bcomp_decomp(const char *source, const char *target) {
     if(err_flag == INVALID_HEADER_FLAG) {
         return INVALID_HEADER_FLAG;
     }
-    if(err_flag != 0 && err_flag != 1) {
+    else if(err_flag == INVALID_DATA_TO_DECOMP) {
+        return INVALID_DATA_TO_DECOMP;
+    }
+    else if(err_flag != 0 && err_flag != 1) {
         return -err_flag;
     }
-    return 0;
+    else {
+        return 0;
+    }
 }
 
 void print_help(void) {
