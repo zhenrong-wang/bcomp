@@ -407,13 +407,15 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         return -3;
     }
     while(1) {
+        uint8_t header_offset = decom_state.curr_bits_offset;
         get_next_bits(buffer, buffer_size_byte, 1, &comp_flag, &decom_state, stream);
-        if((decom_state.stream_bytes_curr + decom_state.curr_byte) >= last_state_pos && decom_state.curr_bits_offset >= tail_offset) {
+        if((decom_state.stream_bytes_curr + decom_state.curr_byte) >= last_state_pos && header_offset + tail_offset >= 7) {
             state_orig_bytes = last_state_orig_bytes;
         }
         else {
             state_orig_bytes = FULL_STATE_BYTES;
         }
+        printf("%d \n", state_orig_bytes);
         if(state_orig_bytes == 0) {
             free(buffer);
             return 0;
