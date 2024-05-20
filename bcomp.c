@@ -113,7 +113,6 @@ int8_t is_in_dict(const uint8_t dict_table[], const uint8_t start, const uint8_t
 
 int8_t decomp_read_end(const uint64_t file_size, const uint8_t tail_byte, const struct decomp_state decom_state) {
     uint64_t byte_pos = decom_state.stream_bytes_curr + decom_state.curr_byte;
-    //printf("%d     .........................................................\n", decom_state.stream_bytes_curr + decom_state.curr_byte);
     if(byte_pos < file_size - 2) {
         return 0;
     }
@@ -382,6 +381,8 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
 
     if(block_raw_bytes == 0) {
         comp_state_block->io_end = 1;
+        *prev_bytes = 0;
+        *rest_bytes = 0;
         return 0;
     }
 
@@ -421,13 +422,8 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
         sort_and_parse_freq(freq_table, FREQUENCY_TABLE_SIZE, num_raw_bytes, num_raw_states, &block_comp_opt);
     }
 
-    printf("%d ~~~~~~ %d ~~~~~~~~ %d ~~~~~~~~\n\n", block_raw_bytes, block_comp_opt.num_raw_states, block_comp_opt.num_raw_bytes);
-
-    printf("%f ===%d ==%d====\n", block_comp_opt.comp_ratio, block_comp_opt.block_comp_method, block_comp_opt.dict_elem_code);
-
     uint8_t real_io_end = (block_io_end) && (block_comp_opt.num_raw_bytes == block_raw_bytes);
     comp_state_block->io_end = real_io_end;
-    printf("%d ,,,,,,,,,,,,,,,,,,,,,\n", comp_state_block->io_end);
 
     /* If the whole block is uncompressible, just add a header 0 */
     if(block_comp_opt.comp_ratio > 1.0) {
@@ -435,7 +431,6 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
         for(i = 0; i < block_comp_opt.num_raw_bytes; i++) {
             append_comp_byte_block(comp_state_block, block[i], 8);
         }
-        //printf("%d   %d  \n", block_comp_opt.num_raw_bytes, block_comp_opt.num_raw_states);
         *prev_bytes = block_comp_opt.num_raw_bytes;
         *rest_bytes = block_raw_bytes - *prev_bytes;
         return 0; 
@@ -484,7 +479,6 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
         append_comp_byte_block(comp_state_block, (uint8_t)0x80, 1);
         append_comp_byte_block(comp_state_block, (freq_pos << (8 - block_comp_opt.comp_byte_size)), block_comp_opt.comp_byte_size);
     }
-    //printf("%d ............................\n", comp_state_block->curr_byte);
     *prev_bytes = block_comp_opt.num_raw_bytes;
     *rest_bytes = block_raw_bytes - *prev_bytes;
     return 0; 
@@ -545,7 +539,6 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         }
         memset(state_buffer, 0, FULL_BLOCK_BYTES);
         get_next_bits(buffer, buffer_size_byte, 1, &comp_flag, &decom_state, stream);
-        printf("%d     =%d           =%d====\n", comp_flag, decom_state.curr_byte, decom_state.stream_bytes_curr);
         if(comp_flag == 0) {
             for(i = 0; i < FULL_BLOCK_BYTES && (!decomp_read_end(file_size, tail_byte, decom_state)); i++) {
                 get_next_bits(buffer, buffer_size_byte, 8, state_buffer + i, &decom_state, stream);
@@ -560,7 +553,6 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         
         get_next_bits(buffer, buffer_size_byte, 2, &comp_method, &decom_state, stream);
         get_next_bits(buffer, buffer_size_byte, 2, &dict_elem_code, &decom_state, stream);
-        printf("%d     ''''''''''''''''''%d\n",comp_method, dict_elem_code);
         if(check_header_validity(comp_method, dict_elem_code) == INVALID_HEADER_FLAG) {
             free(buffer);
             return INVALID_HEADER_FLAG;
@@ -628,7 +620,6 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
             }
         }
         fwrite(state_buffer, sizeof(uint8_t), i - start_pos, target);
-        printf("%d ,,,,<<<<<<<<<<<<<<<<<<<<<<\n", i - start_pos);
         if(decomp_read_end(file_size, tail_byte, decom_state)) {
             free(buffer);
             return 0;
@@ -712,42 +703,21 @@ int file_bcomp(const char *source, const char *target) {
         return FILE_IO_ERROR;
     }
 #endif
-    uint8_t ingest_buffer_read[FULL_BLOCK_BYTES] = {0x00, };
-    uint8_t ingest_buffer_prev[FULL_BLOCK_BYTES] = {0x00, };
     uint8_t ingest_buffer_comp[FULL_BLOCK_BYTES] = {0x00, };
+    uint8_t ingest_buffer_prev[FULL_BLOCK_BYTES] = {0x00, };
     struct bcomp_state_block comp_state;
     struct bcomp_obuffer_block output_buffer;
     int8_t err_flag = 0, fwrite_flag = 0;
     memset(&comp_state, 0, sizeof(struct bcomp_state_block));
     memset(&output_buffer, 0, sizeof(struct bcomp_obuffer_block));
     size_t bytes_read = 0;
-    uint16_t prev_bytes = 0, max_bytes = 0, new_bytes = 0, rest_bytes = 0;
+    uint16_t prev_bytes, new_bytes_max = 0, rest_bytes = 0;
     while(1) {
-        /* Initialize the ingest buffer for compression to 0. */
-        memset(ingest_buffer_comp, 0, FULL_BLOCK_BYTES * sizeof(uint8_t));
-
         /* Read a full block from the file stream. */
-        bytes_read = fread(ingest_buffer_read, sizeof(uint8_t), FULL_BLOCK_BYTES, filep_s);
-
-        /* Calculate the previous residual bytes. */
-        max_bytes = ((rest_bytes + bytes_read) <= FULL_BLOCK_BYTES) ? (rest_bytes + bytes_read) : FULL_BLOCK_BYTES;
-
-        /* Calculate the new bytes to be copied. */
-        new_bytes = max_bytes - rest_bytes;
-
-        printf("%d    ----------------- %d\n", prev_bytes, new_bytes);
-
-        /* Copy the previous residual bytes. */
-        memcpy(ingest_buffer_comp, ingest_buffer_prev + prev_bytes, sizeof(uint8_t) * rest_bytes);
-        memcpy(ingest_buffer_comp + rest_bytes, ingest_buffer_read, new_bytes);
-
-        for(uint16_t kk = 0; kk < 200; kk++) {
-            printf("%x ", ingest_buffer_comp[kk]);
-        }
-
-        printf("\n");
-
-        if(block_compress_core(ingest_buffer_comp, rest_bytes + new_bytes, &comp_state, &prev_bytes, &rest_bytes) < 0) {
+        new_bytes_max = FULL_BLOCK_BYTES - rest_bytes;
+        memcpy(ingest_buffer_comp, ingest_buffer_prev + prev_bytes, rest_bytes * sizeof(uint8_t));
+        bytes_read = fread(ingest_buffer_comp + rest_bytes, sizeof(uint8_t), new_bytes_max, filep_s);
+        if(block_compress_core(ingest_buffer_comp, GET_MIN(bytes_read, new_bytes_max) + rest_bytes, &comp_state, &prev_bytes, &rest_bytes) < 0) {
             err_flag = -1;
             goto close_and_return;
         }
