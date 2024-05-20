@@ -111,8 +111,9 @@ int8_t is_in_dict(const uint8_t dict_table[], const uint8_t start, const uint8_t
     return -1;
 }
 
-int8_t decomp_read_end(const uint64_t file_size, const uint8_t tail_byte, const struct decomp_state decom_state) {
-    uint64_t byte_pos = decom_state.stream_bytes_curr + decom_state.curr_byte;
+int8_t decomp_read_end(const int64_t file_size, const uint8_t tail_byte, const struct decomp_state decom_state) {
+    int64_t byte_pos = (int64_t)decom_state.stream_bytes_curr + (int64_t)decom_state.curr_byte;
+    //printf("%d   %d\n", byte_pos, file_size-2);
     if(byte_pos < file_size - 2) {
         return 0;
     }
@@ -501,7 +502,7 @@ int check_header_validity(const uint8_t comp_method, const uint8_t dict_elem_cod
     return 0;
 }
 
-int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte, const uint64_t file_size, const uint8_t tail_byte){
+int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte, const int64_t file_size, const uint8_t tail_byte){
     if(stream == NULL || target == NULL || file_size < 1) {
         return -1;
     }
