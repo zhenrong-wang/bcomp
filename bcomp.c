@@ -761,20 +761,18 @@ int main(int argc, char **argv) {
     }
     int run_flag = 0;
     char comp_filename[2048] = "";
-    char decomp_filename[2048] = "";
     snprintf(comp_filename, 2048, "%s.bc", argv[3]);
-    snprintf(decomp_filename, 2048, "%s.dc", argv[3]);
     if(strcmp(argv[1], "-c") == 0) {
         run_flag = file_bcomp(argv[2], comp_filename);
         printf("INFO: Compressed file %s to %s . Return Value: %d.\n", argv[2], comp_filename, run_flag);
     }
     else {
-        run_flag = file_bcomp_decomp(argv[2], decomp_filename);
+        run_flag = file_bcomp_decomp(argv[2], argv[3]);
         if(run_flag != 0) {
             printf("ERRO: Decompression failed. Error Code: %d.\n", run_flag);
         }
         else {
-            printf("INFO: Decompressed file %s to %s .\n", argv[2], decomp_filename);
+            printf("INFO: Decompressed file %s to %s .\n", argv[2], argv[3]);
         }
     }
     printf("Repository: https://github.com/zhenrong-wang/bcomp \n");
