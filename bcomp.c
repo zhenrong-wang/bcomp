@@ -23,7 +23,7 @@
 #define COMP_METHOD_MAX         3
 #define DICT_ELEM_CODE_MAX_A    3  
 #define DICT_ELEM_CODE_MAX_BCD  2
-#define COMP_FILE_MIN_SIZE      4
+#define COMP_FILE_MIN_SIZE      1
 #define INVALID_HEADER_FLAG     127
 #define INVALID_TAIL_INFO       125
 #define INVALID_FILE_TO_DECOMP  123
@@ -198,6 +198,7 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
     comp_state->io_end = 0;
 
     if(raw_bytes == 0) {
+        //append_comp_byte(comp_state, (uint8_t)0x00, 8);
         comp_state->io_end = 1;
         return 0;
     }
@@ -443,12 +444,12 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
             uint16_t unique_dict_num_real = 0;
             get_next_bits(buffer, buffer_size_byte, 8, &unique_dict_elem, &decom_state, stream);
             if(tail_byte == 0x00) {
-                if(decom_state.stream_bytes_curr + decom_state.curr_byte == file_size - 2) {
+                if((decom_state.stream_bytes_curr + decom_state.curr_byte == file_size - 2) && (decom_state.curr_bits_offset == 0)) {
                     get_next_bits(buffer, buffer_size_byte, 8, &unique_dict_num, &decom_state, stream);
                 }
             }
             else {
-                if(decom_state.stream_bytes_curr + decom_state.curr_byte == file_size - 3) {
+                if((decom_state.stream_bytes_curr + decom_state.curr_byte == file_size - 3) && (decom_state.curr_bits_offset == tail_byte)) {
                     get_next_bits(buffer, buffer_size_byte, 8, &unique_dict_num, &decom_state, stream);
                 }
             }
@@ -456,7 +457,7 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
             for(i = 0; i < unique_dict_num_real; i++) {
                 state_buffer[i] = unique_dict_elem;
             }
-            fwrite(state_buffer, sizeof(uint8_t), i, target);
+            fwrite(state_buffer, sizeof(uint8_t), unique_dict_num_real, target);
             if(decomp_read_end(file_size, tail_byte, decom_state)) {
                 free(buffer);
                 return 0;
