@@ -23,7 +23,7 @@
 #define COMP_METHOD_MAX         3
 #define DICT_ELEM_CODE_MAX_A    3  
 #define DICT_ELEM_CODE_MAX_BCD  2
-#define COMP_FILE_MIN_SIZE      4
+#define COMP_FILE_MIN_SIZE      1
 #define INVALID_HEADER_FLAG     127
 #define INVALID_TAIL_INFO       125
 #define INVALID_FILE_TO_DECOMP  123
@@ -79,6 +79,22 @@ int8_t is_top_freq(const struct freq_matrix *frequency, const uint8_t start, con
     return -1;
 }
 
+int8_t decomp_read_end(const int64_t file_size, const uint8_t tail_byte, const struct decomp_state decom_state) {
+    int64_t byte_pos = (int64_t)decom_state.stream_bytes_curr + (int64_t)decom_state.curr_byte;
+    if(byte_pos < file_size - 2) {
+        return 0;
+    }
+    if(byte_pos > file_size - 2) {
+        return 1;
+    }
+    if(tail_byte == 0x00) {
+        return 0;
+    }
+    if(decom_state.curr_bits_offset < tail_byte) {
+        return 0;
+    }
+    return 1;
+}
 
 int get_next_bits(uint8_t buffer[], const uint64_t buffer_size_byte, const uint8_t num_of_bits, uint8_t *res, struct decomp_state *decom_state, FILE *stream) {
     if(stream == NULL || res == NULL || decom_state == NULL) {
@@ -182,7 +198,7 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
     comp_state->io_end = 0;
 
     if(raw_bytes == 0) {
-        append_comp_byte(comp_state, (uint8_t)0x00, 8);
+        //append_comp_byte(comp_state, (uint8_t)0x00, 8);
         comp_state->io_end = 1;
         return 0;
     }
@@ -294,7 +310,6 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
             append_comp_byte(comp_state, state[i], 8);
         }
         if(raw_bytes != FULL_STATE_BYTES) {
-            append_comp_byte(comp_state, (uint8_t)raw_bytes, 8);
             comp_state->io_end = 1;
         }
         return 2;
@@ -350,7 +365,6 @@ int8_t compress_core(const uint8_t state[], const uint16_t raw_bytes, struct bco
         }
     }
     if(raw_bytes != FULL_STATE_BYTES) {
-        append_comp_byte(comp_state, (uint8_t)raw_bytes, 8);
         comp_state->io_end = 1;
     }
     return 3;
@@ -373,18 +387,12 @@ int check_header_validity(const uint8_t comp_method, const uint8_t dict_elem_cod
     return 0;
 }
 
-int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte, const uint64_t file_size, const uint8_t file_tail[]){
-    if(stream == NULL || target == NULL || file_size < 3 || file_tail == NULL || buffer_size_byte < 64) {
+int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte, const uint64_t file_size, const uint8_t tail_byte){
+    if(stream == NULL || target == NULL || file_size < 1 || buffer_size_byte < 64) {
         return -1;
     }
 
     uint16_t i = 0;
-    uint16_t last_buffer_size = (file_tail[3] == 0) ? 256 : file_tail[3];
-    uint64_t last_state_pos = ((int64_t)(file_size - last_buffer_size - 2) > 0) ? (file_size - last_buffer_size - 2) : 0;
-    
-    uint16_t state_orig_bytes = 0;
-    uint8_t tail_offset = file_tail[2];
-    uint8_t last_state_orig_bytes = file_tail[0] << tail_offset | file_tail[1] >> (8 - tail_offset);
     uint8_t comp_flag = 0;
     uint8_t state_buffer[FULL_STATE_BYTES] = {0x00, };
     struct decomp_state decom_state;
@@ -407,24 +415,18 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         return -3;
     }
     while(1) {
-        get_next_bits(buffer, buffer_size_byte, 1, &comp_flag, &decom_state, stream);
-        if((decom_state.stream_bytes_curr + decom_state.curr_byte) >= last_state_pos) {
-            state_orig_bytes = last_state_orig_bytes;
-        }
-        else {
-            state_orig_bytes = FULL_STATE_BYTES;
-        }
-        if(state_orig_bytes == 0) {
+        if(decomp_read_end(file_size, tail_byte, decom_state)) {
             free(buffer);
             return 0;
         }
+        memset(state_buffer, 0, FULL_STATE_BYTES);
+        get_next_bits(buffer, buffer_size_byte, 1, &comp_flag, &decom_state, stream);
         if(comp_flag == 0) {
-            memset(state_buffer, 0, FULL_STATE_BYTES);
-            for(i = 0; i < state_orig_bytes; i++) {
+            for(i = 0; i < FULL_STATE_BYTES && (!decomp_read_end(file_size, tail_byte, decom_state)); i++) {
                 get_next_bits(buffer, buffer_size_byte, 8, state_buffer + i, &decom_state, stream);
             }
-            fwrite(state_buffer, sizeof(uint8_t), state_orig_bytes, target);
-            if(state_orig_bytes < FULL_STATE_BYTES) {
+            fwrite(state_buffer, sizeof(uint8_t), i, target);
+            if(decomp_read_end(file_size, tail_byte, decom_state)) {
                 free(buffer);
                 return 0;
             }
@@ -437,14 +439,26 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
             return INVALID_HEADER_FLAG;
         }
         if(comp_method == 0 && dict_elem_code == 3) {
-            memset(state_buffer, 0, FULL_STATE_BYTES);
             uint8_t unique_dict_elem = 0;
+            uint8_t unique_dict_num = 0;
+            uint16_t unique_dict_num_real = 0;
             get_next_bits(buffer, buffer_size_byte, 8, &unique_dict_elem, &decom_state, stream);
-            for(i = 0; i < state_orig_bytes; i++) {
+            if(tail_byte == 0x00) {
+                if((decom_state.stream_bytes_curr + decom_state.curr_byte == file_size - 2) && (decom_state.curr_bits_offset == 0)) {
+                    get_next_bits(buffer, buffer_size_byte, 8, &unique_dict_num, &decom_state, stream);
+                }
+            }
+            else {
+                if((decom_state.stream_bytes_curr + decom_state.curr_byte == file_size - 3) && (decom_state.curr_bits_offset == tail_byte)) {
+                    get_next_bits(buffer, buffer_size_byte, 8, &unique_dict_num, &decom_state, stream);
+                }
+            }
+            unique_dict_num_real = (unique_dict_num == 0x00) ? FULL_STATE_BYTES : unique_dict_num;
+            for(i = 0; i < unique_dict_num_real; i++) {
                 state_buffer[i] = unique_dict_elem;
             }
-            fwrite(state_buffer, sizeof(uint8_t), state_orig_bytes, target);
-            if(state_orig_bytes < FULL_STATE_BYTES) {
+            fwrite(state_buffer, sizeof(uint8_t), unique_dict_num_real, target);
+            if(decomp_read_end(file_size, tail_byte, decom_state)) {
                 free(buffer);
                 return 0;
             }
@@ -454,8 +468,8 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         for(i = 0; i < num_dict_elems[comp_method]; i++) {
             get_next_bits(buffer, buffer_size_byte, dict_elem_size[comp_method][dict_elem_code], dict_elems + i, &decom_state, stream);
         }
-        memset(state_buffer, 0, FULL_STATE_BYTES);
-        for(i = 0; i < state_orig_bytes; i++) {
+        
+        for(i = 0; i < FULL_STATE_BYTES && (!decomp_read_end(file_size, tail_byte, decom_state)); i++) {
             get_next_bits(buffer, buffer_size_byte, 1, &byte_comp_flag, &decom_state, stream);
             if(byte_comp_flag == 0) {
                 get_next_bits(buffer, buffer_size_byte, 8, state_buffer + i, &decom_state, stream);
@@ -486,8 +500,8 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
                 }
             }
         }
-        fwrite(state_buffer, sizeof(uint8_t), state_orig_bytes, target);
-        if(state_orig_bytes < FULL_STATE_BYTES) {
+        fwrite(state_buffer, sizeof(uint8_t), i, target);
+        if(decomp_read_end(file_size, tail_byte, decom_state)) {
             free(buffer);
             return 0;
         }
@@ -526,7 +540,9 @@ int padding_comp_obuffer(const struct bcomp_state *comp_state, struct bcomp_obuf
     }
     else {
         output_buffer->bytes_array[i] = (comp_state->bytes[i-1] << (8 - tail_bits_prev)) | (comp_state->bytes[i] >> tail_bits_prev);
-        output_buffer->bytes_valid++;
+        if(tail_bits_new != 0) {
+            output_buffer->bytes_valid++;
+        }
     }
     return 0;
 }
@@ -539,9 +555,7 @@ int fwrite_comp(FILE *file_p, const struct bcomp_obuffer *output_buffer) {
         return -3;
     }
     if(output_buffer->io_end) {
-        uint8_t last_state_byte = (uint8_t)(output_buffer->bytes_valid);
         fwrite(&(output_buffer->prev_tail_high_bits), sizeof(uint8_t), 1, file_p);
-        fwrite(&last_state_byte, sizeof(uint8_t), 1, file_p);
         return 1;
     }
     return 0;
@@ -622,16 +636,16 @@ int file_bcomp_decomp(const char *source, const char *target) {
         return FILE_IO_ERROR;
     }
 #endif
-    uint8_t tail_info[4] = {0x00, };
+    uint8_t file_tail = 0x00;
     uint64_t read_buffer_size = 0;
 #ifdef _WIN32
-    _fseeki64(filep_s, -4, SEEK_END);
-    int64_t file_size = _ftelli64(filep_s) + 4;
+    _fseeki64(filep_s, -1, SEEK_END);
+    int64_t file_size = _ftelli64(filep_s) + 1;
 #else
-    fseeko(filep_s, -4, SEEK_END);
-    int64_t file_size = ftello(filep_s) + 4;
+    fseeko(filep_s, -1, SEEK_END);
+    int64_t file_size = ftello(filep_s) + 1;
 #endif
-    if(fread(tail_info, sizeof(uint8_t), 4, filep_s) != 4) {
+    if(fread(&file_tail, sizeof(uint8_t), 1, filep_s) != 1) {
         fclose(filep_s);
         return INVALID_TAIL_INFO;
     }
@@ -646,7 +660,7 @@ int file_bcomp_decomp(const char *source, const char *target) {
         fclose(filep_s);
         return INVALID_FILE_TO_DECOMP;
     }
-    if(tail_info[2] > 7) {
+    if(file_tail > 7) {
         fclose(filep_s);
         return INVALID_TAIL_INFO;
     }
@@ -664,7 +678,7 @@ int file_bcomp_decomp(const char *source, const char *target) {
         return FILE_IO_ERROR;
     }
 #endif
-    int err_flag = file_decomp_core(filep_s, filep_t, read_buffer_size, file_size, tail_info);
+    int err_flag = file_decomp_core(filep_s, filep_t, read_buffer_size, file_size, file_tail);
     fclose(filep_s);
     fclose(filep_t);
     if(err_flag == INVALID_HEADER_FLAG) {
