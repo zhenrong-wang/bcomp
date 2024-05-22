@@ -82,6 +82,10 @@ struct decomp_state {
 };
 
 struct block_comp_option {
+    uint8_t block_comp_flag;
+    uint8_t block_incomp_size;
+    uint8_t block_incomp_min;
+    uint8_t block_incomp_min_size;
     uint8_t num_raw_states;
     uint16_t num_raw_bytes;
     uint8_t block_comp_method;
@@ -274,8 +278,9 @@ int sort_and_parse_freq(const struct freq_matrix freq_table[], const uint16_t fr
     float raw_bits = (float)num_raw_bytes * 8;
 
     if(freq_table_copy[0].freq == num_raw_bytes) {
-        block_comp_opt->block_comp_method = 0x00;
-        block_comp_opt->dict_elem_code = 0x03;
+        block_comp_opt->block_comp_flag = 1;
+        block_comp_opt->block_comp_method = 0;
+        block_comp_opt->dict_elem_code = 3;
         block_comp_opt->num_raw_states = num_raw_states;
         block_comp_opt->num_raw_bytes = num_raw_bytes;
         block_comp_opt->dict_elem_bits = 8;
@@ -285,6 +290,22 @@ int sort_and_parse_freq(const struct freq_matrix freq_table[], const uint16_t fr
         block_comp_opt->comp_ratio = 16.0 / raw_bits;
         return 0;
     }
+
+    uint8_t min = 0xFF, max = 0x00;
+    uint16_t uniq = 0x00;
+    for(uint16_t k = 0; k < 256; k++) {
+        if(freq_table_copy[k].freq != 0) {
+            uniq++;
+            if(freq_table_copy[k].index < min) {
+                min = freq_table_copy[k].index;
+            }
+            if(freq_table_copy[k].index > max) {
+                max = freq_table_copy[k].index;
+            }
+        }
+    }
+
+    //printf("%d   %d   %d\n", min, max, uniq);
 
     uint32_t top2_freqs = freq_table_copy[0].freq + freq_table_copy[1].freq;
     uint32_t top4_freqs = freq_table_copy[2].freq + freq_table_copy[3].freq + top2_freqs;
@@ -345,14 +366,59 @@ int sort_and_parse_freq(const struct freq_matrix freq_table[], const uint16_t fr
         }
     }
 
-    if(comp_ratio_tmp > 1.0) {
-        block_comp_opt->num_raw_states = num_raw_states;
-        block_comp_opt->num_raw_bytes = num_raw_bytes;
-        block_comp_opt->comp_ratio = (0.125 + (float)num_raw_bytes) / (float)num_raw_bytes;
+    uint8_t incomp_size = 0;
+    float incomp_ratio = 0.0;
+    uint8_t min_size = 0;
+
+    if(max - min < 2) {
+        incomp_size = 1;
+    }   
+    else if(max -min < 4) {
+        incomp_size = 2;
+    }
+    else if(max -min < 8) {
+        incomp_size = 3;
+    }
+    else if(max -min < 16) {
+        incomp_size = 4;
+    }
+    else if(max -min < 32) {
+        incomp_size = 5;
+    }
+    else if(max -min < 64) {
+        incomp_size = 6;
+    }
+    else if(max -min < 128) {
+        incomp_size = 7;
+    }
+    else {
+        incomp_size = 0;
+    }
+
+    if(min < 16) {
+        min_size = 0;
+    }
+    else {
+        min_size = 1;
+    }
+
+    incomp_ratio = (5 + (min_size + 1) * 4 + num_raw_bytes * incomp_size) / raw_bits;
+    //printf("%lf \n", comp_ratio_tmp);
+    if(comp_ratio_tmp > block_comp_opt->comp_ratio || comp_ratio_tmp > incomp_ratio) {
+        if(incomp_ratio < block_comp_opt->comp_ratio) {
+            block_comp_opt->block_comp_flag = 0;
+            block_comp_opt->block_incomp_size = incomp_size;
+            block_comp_opt->block_incomp_min = min;
+            block_comp_opt->block_incomp_min_size = min_size;
+            block_comp_opt->num_raw_states = num_raw_states;
+            block_comp_opt->num_raw_bytes = num_raw_bytes;
+            block_comp_opt->comp_ratio = incomp_ratio;
+        }
         return 0;
     }
 
     if(comp_ratio_tmp < block_comp_opt->comp_ratio) {
+        block_comp_opt->block_comp_flag = 1;
         block_comp_opt->block_comp_method = comp_method_tmp;
         block_comp_opt->dict_elem_code = dict_elem_code_tmp;
         block_comp_opt->num_raw_states = num_raw_states;
@@ -425,18 +491,22 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
 
     uint8_t real_io_end = (block_io_end) && (block_comp_opt.num_raw_bytes == block_raw_bytes);
     comp_state_block->io_end = real_io_end;
-
+    //printf("%d   %d   %d   %d\n", block_comp_opt.block_comp_flag, block_comp_opt.block_comp_method, block_comp_opt.block_incomp_size, block_comp_opt.block_incomp_min_size);
     /* If the whole block is uncompressible, just add a header 0 */
-    if(block_comp_opt.comp_ratio > 1.0) {
+    if(block_comp_opt.block_comp_flag == 0) {
         append_comp_byte_block(comp_state_block, 0x00, 1);
+        append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_size << 5, 3);
+        append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_min_size << 7, 1);
+        uint8_t min_size = 4 * (block_comp_opt.block_incomp_min_size + 1);
+        append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_min << (8 - min_size), min_size);
+        uint8_t low_bits = (block_comp_opt.block_incomp_size == 0) ? 8 : block_comp_opt.block_incomp_size;
         for(i = 0; i < block_comp_opt.num_raw_bytes; i++) {
-            append_comp_byte_block(comp_state_block, block[i], 8);
+            append_comp_byte_block(comp_state_block, (block[i] - block_comp_opt.block_incomp_min) << (8 - low_bits), low_bits);
         }
         *prev_bytes = block_comp_opt.num_raw_bytes;
         *rest_bytes = block_raw_bytes - *prev_bytes;
         return 0; 
     }
-
     header = (0x80) | (block_comp_opt.block_comp_method << 5) | (block_comp_opt.dict_elem_code << 3) | ((block_comp_opt.num_raw_states) & (0x07));
     append_comp_byte_block(comp_state_block, header, 8);
     
@@ -528,6 +598,10 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
     uint8_t comp_method = 0, dict_elem_code = 0;
     uint64_t start_pos = 0;
     uint8_t comp_states = 0;
+    uint8_t incomp_size = 0;
+    uint8_t incomp_min = 0;
+    uint8_t incomp_byte = 0;
+    uint8_t incomp_min_size = 0;
 
     uint8_t *buffer = (uint8_t *)calloc(buffer_size_byte, sizeof(uint8_t));
     if(buffer == NULL) {
@@ -541,8 +615,15 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         memset(state_buffer, 0, FULL_BLOCK_BYTES);
         get_next_bits(buffer, buffer_size_byte, 1, &comp_flag, &decom_state, stream);
         if(comp_flag == 0) {
+            get_next_bits(buffer, buffer_size_byte, 3, &incomp_size, &decom_state, stream);
+            get_next_bits(buffer, buffer_size_byte, 1, &incomp_min_size, &decom_state, stream);
+            incomp_min_size = (incomp_min_size + 1) * 4;
+            get_next_bits(buffer, buffer_size_byte, incomp_min_size, &incomp_min, &decom_state, stream);
+            incomp_size = (incomp_size == 0) ? 8 : incomp_size;
             for(i = 0; i < FULL_BLOCK_BYTES && (!decomp_read_end(file_size, tail_byte, decom_state)); i++) {
-                get_next_bits(buffer, buffer_size_byte, 8, state_buffer + i, &decom_state, stream);
+                get_next_bits(buffer, buffer_size_byte, incomp_size, &incomp_byte, &decom_state, stream);
+                state_buffer[i] = incomp_min + incomp_byte;
+
             }
             fwrite(state_buffer, sizeof(uint8_t), i - start_pos, target);
             if(decomp_read_end(file_size, tail_byte, decom_state)) {
@@ -551,7 +632,6 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
             }
             continue;
         }
-        
         get_next_bits(buffer, buffer_size_byte, 2, &comp_method, &decom_state, stream);
         get_next_bits(buffer, buffer_size_byte, 2, &dict_elem_code, &decom_state, stream);
         //printf("%d \t %d \n", comp_method, dict_elem_code);
