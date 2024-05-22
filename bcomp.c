@@ -421,20 +421,6 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
             freq_table[block[i*FULL_STATE_BYTES + j]].freq++;
         }
         sort_and_parse_freq(freq_table, FREQUENCY_TABLE_SIZE, num_raw_bytes, num_raw_states, &block_comp_opt);
-        /*uint8_t aa = 0, bb = 0xFF;
-        uint16_t kkk = 0;
-        for(uint16_t kk = 0; kk < 256; kk++) {
-            if(freq_table[kk].freq != 0 && kk > aa) {
-                aa = kk;
-            }
-            if(freq_table[kk].freq != 0 && kk < bb) {
-                bb = kk;
-            }
-            if(freq_table[kk].freq != 0) {
-                kkk++;
-            }
-        }
-        //printf("MIN:\t%d\tMAX:\t %d\tUNIQ: %d\n", bb, aa, kkk);*/
     }
 
     uint8_t real_io_end = (block_io_end) && (block_comp_opt.num_raw_bytes == block_raw_bytes);
@@ -582,14 +568,18 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
             uint16_t unique_elem_last_real = 0;
             uint16_t unique_elem_total = 0;
             get_next_bits(buffer, buffer_size_byte, 8, &unique_dict_elem, &decom_state, stream);
-            if(decomp_read_end(file_size, tail_byte, decom_state)) {
-                get_next_bits(buffer, buffer_size_byte, 8, &unique_elem_last, &decom_state, stream);
-                unique_elem_last_real = (unique_elem_last == 0) ? 256 : unique_elem_last;
-                unique_elem_total = FULL_STATE_BYTES * (comp_states - 1) + unique_elem_last_real;
+            if(tail_byte == 0x00) {
+                if((decom_state.stream_bytes_curr + decom_state.curr_byte == file_size - 2) && (decom_state.curr_bits_offset == 0)) {
+                    get_next_bits(buffer, buffer_size_byte, 8, &unique_elem_last, &decom_state, stream);
+                }
             }
             else {
-                unique_elem_total = comp_states * FULL_STATE_BYTES;
+                if((decom_state.stream_bytes_curr + decom_state.curr_byte == file_size - 3) && (decom_state.curr_bits_offset == tail_byte)) {
+                    get_next_bits(buffer, buffer_size_byte, 8, &unique_elem_last, &decom_state, stream);
+                }
             }
+            unique_elem_last_real = (unique_elem_last == 0x00) ? FULL_STATE_BYTES : unique_elem_last;
+            unique_elem_total = FULL_STATE_BYTES * (comp_states - 1) + unique_elem_last_real;
             for(i = 0; i < unique_elem_total; i++) {
                 state_buffer[i] = unique_dict_elem;
             }
