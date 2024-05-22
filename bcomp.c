@@ -421,7 +421,7 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
             freq_table[block[i*FULL_STATE_BYTES + j]].freq++;
         }
         sort_and_parse_freq(freq_table, FREQUENCY_TABLE_SIZE, num_raw_bytes, num_raw_states, &block_comp_opt);
-        uint8_t aa = 0, bb = 0xFF;
+        /*uint8_t aa = 0, bb = 0xFF;
         uint16_t kkk = 0;
         for(uint16_t kk = 0; kk < 256; kk++) {
             if(freq_table[kk].freq != 0 && kk > aa) {
@@ -434,7 +434,7 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
                 kkk++;
             }
         }
-        printf("MIN:\t%d\tMAX:\t %d\tUNIQ: %d\n", bb, aa, kkk);
+        //printf("MIN:\t%d\tMAX:\t %d\tUNIQ: %d\n", bb, aa, kkk);*/
     }
 
     uint8_t real_io_end = (block_io_end) && (block_comp_opt.num_raw_bytes == block_raw_bytes);
@@ -568,7 +568,7 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         
         get_next_bits(buffer, buffer_size_byte, 2, &comp_method, &decom_state, stream);
         get_next_bits(buffer, buffer_size_byte, 2, &dict_elem_code, &decom_state, stream);
-        printf("%d \t %d \n", comp_method, dict_elem_code);
+        //printf("%d \t %d \n", comp_method, dict_elem_code);
         if(check_header_validity(comp_method, dict_elem_code) == INVALID_HEADER_FLAG) {
             free(buffer);
             return INVALID_HEADER_FLAG;
@@ -579,7 +579,7 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         if(comp_method == 0 && dict_elem_code == 3) {
             uint8_t unique_dict_elem = 0;
             uint8_t unique_elem_last = 0;
-            uint8_t unique_elem_last_real = 0;
+            uint16_t unique_elem_last_real = 0;
             uint16_t unique_elem_total = 0;
             get_next_bits(buffer, buffer_size_byte, 8, &unique_dict_elem, &decom_state, stream);
             if(decomp_read_end(file_size, tail_byte, decom_state)) {
