@@ -620,6 +620,8 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
         for(i = 0; i < block_comp_opt.num_raw_bytes; i++) {
             append_comp_byte_block(comp_state_block, (block[i] - block_comp_opt.block_incomp_min) << (8 - low_bits), low_bits);
         }
+        *prev_bytes = block_comp_opt.num_raw_bytes;
+        *rest_bytes = block_raw_bytes - *prev_bytes;
         return 0;
     }
 
