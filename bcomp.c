@@ -596,7 +596,7 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
     uint8_t real_io_end = (block_io_end) && (block_comp_opt.num_raw_bytes == block_raw_bytes);
     comp_state_block->io_end = real_io_end;
     /* If the whole block is uncompressible, just add a header 0 */
-    //printf("%d -- %d -\n", block_comp_opt.block_comp_flag, block_comp_opt.block_comp_method);
+    //printf("%d -- %d -- %d\n", block_comp_opt.block_comp_flag, block_comp_opt.block_comp_method, block_comp_opt.dict_elem_code);
     if(block_comp_opt.block_comp_flag == 0) {
         append_comp_byte_block(comp_state_block, 0x00, 1);
         //append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
