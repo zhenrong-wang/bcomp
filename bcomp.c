@@ -21,9 +21,9 @@
 #define FREQUENCY_TABLE_SIZE    256
 #define FULL_STATE_BYTES        256
 #define DECOMP_INGEST_BYTES     1024
-#define COMP_METHOD_MAX         3
-#define DICT_ELEM_CODE_MAX_A    3  
-#define DICT_ELEM_CODE_MAX_BCD  2
+#define COMP_METHOD_MAX         6
+#define DICT_ELEM_CODE_MAX_A    4  
+#define DICT_ELEM_CODE_MAX_BCD  3
 #define INVALID_HEADER_FLAG     127
 #define INVALID_FILE_TO_DECOMP  123
 #define FILE_IO_ERROR           121
@@ -90,10 +90,13 @@ struct block_comp_option {
     uint16_t num_raw_bytes;
     uint8_t block_comp_method;
     uint8_t dict_elem_code;
-    uint8_t dict_elem_table[6];
+    uint8_t dict_elem_table[64];
     uint8_t dict_elem_bits;
     uint8_t num_dict_elems;
     uint8_t comp_byte_size;
+    uint8_t comp_incomp_min;
+    uint8_t comp_incomp_flag;
+    uint8_t comp_incomp_bits;
     float comp_ratio;
 };
 
@@ -103,11 +106,11 @@ int compare(const void *a, const void *b) {
     return ptr_b->freq - ptr_a->freq;
 }
 
-int8_t is_in_dict(const uint8_t dict_table[], const uint8_t start, const uint8_t end, const uint8_t byte) {
+int8_t is_in_dict(const uint8_t dict_table[], const uint8_t start, const uint8_t end, const uint8_t num_dict_elems_max, const uint8_t byte) {
     if(dict_table == NULL) {
         return -3;
     }
-    for(uint8_t i = start; i < end && i < 6; i++) {
+    for(uint8_t i = start; i < end && i < num_dict_elems_max; i++) {
         if(byte == dict_table[i]) {
             return i;
         }
@@ -117,7 +120,6 @@ int8_t is_in_dict(const uint8_t dict_table[], const uint8_t start, const uint8_t
 
 int8_t decomp_read_end(const int64_t file_size, const uint8_t tail_byte, const struct decomp_state decom_state) {
     int64_t byte_pos = (int64_t)decom_state.stream_bytes_curr + (int64_t)decom_state.curr_byte;
-    //printf("%d   %d\n", byte_pos, file_size-2);
     if(byte_pos < file_size - 2) {
         return 0;
     }
@@ -233,11 +235,11 @@ int init_freq_table(struct freq_matrix freq_table[], const uint16_t num_elems) {
     return 0;
 }
 
-int create_dict_table(const struct freq_matrix sorted_freq_table[], uint8_t dict_elem_table[]) {
+int create_dict_table(const struct freq_matrix sorted_freq_table[], uint8_t dict_elem_table[], uint8_t num_dict_elems) {
     if(sorted_freq_table == NULL || dict_elem_table == NULL) {
         return -1;
     }
-    for(uint8_t i = 0; i < 6; i++) {
+    for(uint8_t i = 0; i < num_dict_elems; i++) {
         dict_elem_table[i] = sorted_freq_table[i].index;
     }
     return 0;
@@ -257,25 +259,31 @@ int sort_and_parse_freq(const struct freq_matrix freq_table[], const uint16_t fr
     init_freq_table(freq_table_copy, FREQUENCY_TABLE_SIZE);
     memcpy(freq_table_copy, freq_table, freq_elems * sizeof(struct freq_matrix));
     qsort(freq_table_copy, FREQUENCY_TABLE_SIZE, sizeof(struct freq_matrix), compare);
-    uint8_t delm_idx[4] = {0,};
 
-    const uint8_t num_dict_elems[4] = {2, 4, 6, 6};
-    const uint8_t dict_elem_size[4][3] = {
+    const uint8_t num_dict_elems[6] = {2, 4, 8, 16, 32, 64};
+    const uint8_t dict_elem_size[6][3] = {
         {1, 4, 8},
         {2, 4, 8},
         {3, 6, 8},
-        {3, 6, 8}
+        {4, 6, 8},
+        {5, 7, 8},
+        {6, 7, 8},
     };
-    const uint8_t dict_total_size[4][3] = {
-        {2,  8,  16},
-        {8,  16, 32},
-        {18, 36, 48},
-        {18, 36, 48}
+    const uint16_t dict_total_size[6][3] = {
+        {2,   8,   16},
+        {8,   16,  32},
+        {24,  48,  64},
+        {64,  96,  128},
+        {160, 224, 256},
+        {384, 448, 512}
     };
-    const uint8_t comp_byte_size[4] = {1, 2, 0xFF, 3};
+    const uint8_t comp_byte_size[6] = {1, 2, 3, 4, 5, 6};
 
-    float comp_ratios[4] = {0.0, };
     float raw_bits = (float)num_raw_bytes * 8;
+    
+    uint32_t top_freqs[6] = {0x00, };
+    uint8_t top_idx_max_tmp = 0, top_idx_max[6] = {0x00, };
+    float comp_ratios[6] = {0.0, };
 
     if(freq_table_copy[0].freq == num_raw_bytes) {
         block_comp_opt->block_comp_flag = 1;
@@ -286,150 +294,234 @@ int sort_and_parse_freq(const struct freq_matrix freq_table[], const uint16_t fr
         block_comp_opt->dict_elem_bits = 8;
         block_comp_opt->num_dict_elems = 1;
         block_comp_opt->comp_byte_size = 0;
-        create_dict_table(freq_table_copy, block_comp_opt->dict_elem_table);
-        block_comp_opt->comp_ratio = 16.0 / raw_bits;
+        memset(block_comp_opt->dict_elem_table, 0, 64 * sizeof(uint8_t));
+        create_dict_table(freq_table_copy, block_comp_opt->dict_elem_table, 1);
+        block_comp_opt->comp_ratio = 17.0 / raw_bits;
         return 0;
     }
 
-    uint8_t min = 0xFF, max = 0x00;
-    uint16_t uniq = 0x00;
-    for(uint16_t k = 0; k < 256; k++) {
-        if(freq_table_copy[k].freq != 0) {
-            uniq++;
-            if(freq_table_copy[k].index < min) {
-                min = freq_table_copy[k].index;
+    uint16_t i = 0, j = 0, jmin = 0, jmax = 0;
+    uint8_t top_freqs_adj[6][3] = {
+        {0,},
+    };
+    uint8_t min_tmp = 0, max_tmp = 0;
+    for(i = 0; i < 6; i++) {
+        if(i == 0) {
+            top_freqs[i] = 0;
+            jmin = 0;
+            top_idx_max_tmp = 0;
+        }
+        else {
+            top_freqs[i] = top_freqs[i - 1];
+            top_idx_max_tmp = top_idx_max[i - 1];
+            jmin = 0x01 << i;
+        }
+        jmax = 0x01 << (i + 1);
+        for(j = jmin; j < jmax; j++) {
+            top_freqs[i] += freq_table_copy[j].freq;
+            if(freq_table_copy[j].index > top_idx_max_tmp) {
+                top_idx_max_tmp = freq_table_copy[j].index;
             }
-            if(freq_table_copy[k].index > max) {
-                max = freq_table_copy[k].index;
+        }
+        top_idx_max[i] = top_idx_max_tmp;
+        min_tmp = freq_table_copy[j].index;
+        max_tmp = freq_table_copy[j].index;
+        for(j = jmax; j < 256 && freq_table_copy[j].freq != 0; j++) {
+            if(freq_table_copy[j].index < min_tmp) {
+                min_tmp = freq_table_copy[j].index;
             }
+            if(freq_table_copy[j].index > max_tmp) {
+                max_tmp = freq_table_copy[j].index;
+            }
+        }
+        top_freqs_adj[i][0] = min_tmp;
+
+        if(min_tmp < 16) {
+            top_freqs_adj[i][1] = 0;
+        }
+        else {
+            top_freqs_adj[i][1] = 1;
+        }
+
+        if(max_tmp - min_tmp < 2) {
+            top_freqs_adj[i][2] = 1;
+        }
+        else if(max_tmp - min_tmp < 4) {
+            top_freqs_adj[i][2] = 2;
+        }
+        else if(max_tmp - min_tmp < 8) {
+            top_freqs_adj[i][2] = 3;
+        }
+        else if(max_tmp - min_tmp < 16) {
+            top_freqs_adj[i][2] = 4;
+        }
+        else if(max_tmp - min_tmp < 32) {
+            top_freqs_adj[i][2] = 5;
+        }
+        else if(max_tmp - min_tmp < 64) {
+            top_freqs_adj[i][2] = 6;
+        }
+        else if(max_tmp - min_tmp < 128) {
+            top_freqs_adj[i][2] = 7;
+        }
+        else {
+            top_freqs_adj[i][2] = 8;
         }
     }
 
-    //printf("%d   %d   %d\n", min, max, uniq);
+    if(top_idx_max[0] < 2) {
+        top_idx_max[0] = 0;
+    }
+    else if(top_idx_max[0] < 16) {
+        top_idx_max[0] = 1;
+    }
+    else {
+        top_idx_max[0] = 2;
+    }
 
-    uint32_t top2_freqs = freq_table_copy[0].freq + freq_table_copy[1].freq;
-    uint32_t top4_freqs = freq_table_copy[2].freq + freq_table_copy[3].freq + top2_freqs;
-    uint32_t top6_freqs = freq_table_copy[4].freq + freq_table_copy[5].freq + top4_freqs;
-    uint32_t top2_6_freqs = top6_freqs - top2_freqs;
+    if(top_idx_max[1] < 4) {
+        top_idx_max[1] = 0;
+    }
+    else if(top_idx_max[1] < 16) {
+        top_idx_max[1] = 1;
+    }
+    else {
+        top_idx_max[1] = 2;
+    }
+
+    if(top_idx_max[2] < 8) {
+        top_idx_max[2] = 0;
+    }
+    else if(top_idx_max[2] < 64) {
+        top_idx_max[2] = 1;
+    }
+    else {
+        top_idx_max[2] = 2;
+    }
+
+    if(top_idx_max[3] < 16) {
+        top_idx_max[3] = 0;
+    }
+    else if(top_idx_max[3] < 64) {
+        top_idx_max[3] = 1;
+    }
+    else {
+        top_idx_max[3] = 2;
+    }
+
+    if(top_idx_max[4] < 32) {
+        top_idx_max[4] = 0;
+    }
+    else if(top_idx_max[4] < 128) {
+        top_idx_max[4] = 1;
+    }
+    else {
+        top_idx_max[4] = 2;
+    }
+
+    if(top_idx_max[5] < 64) {
+        top_idx_max[5] = 0;
+    }
+    else if(top_idx_max[5] < 128) {
+        top_idx_max[5] = 1;
+    }
+    else {
+        top_idx_max[5] = 2;
+    }
     
-    uint8_t index_max_2 = GET_MAX(freq_table_copy[0].index, freq_table_copy[1].index);
-    uint8_t index_max_4 = GET_MAX(GET_MAX(freq_table_copy[2].index, freq_table_copy[3].index), index_max_2);
-    uint8_t index_max_6 = GET_MAX(GET_MAX(freq_table_copy[4].index, freq_table_copy[5].index), index_max_4);
-
-    if(index_max_2 < 0x02) {
-        delm_idx[0] = 0;
+    for(i = 0; i < 6; i++) {
+        uint8_t incomp_min_size = (top_freqs_adj[i][1] == 1) ? 8 : 4;
+        comp_ratios[i] = (float)(10 + incomp_min_size + 3 + dict_total_size[i][top_idx_max[i]] + top_freqs[i] * comp_byte_size[i] + (num_raw_bytes - top_freqs[i]) * (1 + top_freqs_adj[i][2])) / raw_bits;
     }
-    else if(index_max_2 < 0x10) {
-        delm_idx[0] = 1;
-    }
-    else {
-        delm_idx[0] = 2;
-    }
-
-    if(index_max_4 < 0x04) {
-        delm_idx[1] = 0;
-    }
-    else if(index_max_4 < 0x10) {
-        delm_idx[1] = 1;
-    }
-    else {
-        delm_idx[1] = 2;
-    }
-
-    if(index_max_6 < 8) {
-        delm_idx[2] = 0;
-        delm_idx[3] = 0;
-    }
-    else if(index_max_6 < 0x40) {
-        delm_idx[2] = 1;
-        delm_idx[3] = 1;
-    }
-    else {
-        delm_idx[2] = 2;
-        delm_idx[3] = 2;
-    }
-
-    comp_ratios[0] = (float)(8 + dict_total_size[0][delm_idx[0]] + top2_freqs * 2 + (num_raw_bytes - top2_freqs) * 9) / raw_bits;
-    comp_ratios[1] = (float)(8 + dict_total_size[1][delm_idx[1]] + top4_freqs * 3 + (num_raw_bytes - top4_freqs) * 9) / raw_bits;
-    comp_ratios[2] = (float)(8 + dict_total_size[2][delm_idx[2]] + top2_freqs * 3 + top2_6_freqs * 4 + (num_raw_bytes - top6_freqs) * 9) / raw_bits;
-    comp_ratios[3] = (float)(8 + dict_total_size[3][delm_idx[3]] + top6_freqs * 4 + (num_raw_bytes - top6_freqs) * 9) / raw_bits;
 
     float comp_ratio_tmp = comp_ratios[0];
     uint8_t comp_method_tmp = 0;
-    uint8_t dict_elem_code_tmp = delm_idx[0];
 
-    for(uint8_t i = 1; i < 4; i++) {
+    for(i = 1; i < 6; i++) {
         if(comp_ratios[i] < comp_ratio_tmp) {
             comp_ratio_tmp = comp_ratios[i];
             comp_method_tmp = i;
-            dict_elem_code_tmp = delm_idx[i];
         }
     }
 
-    uint8_t incomp_size = 0;
-    float incomp_ratio = 0.0;
-    uint8_t min_size = 0;
-
-    if(max - min < 2) {
-        incomp_size = 1;
+    uint8_t min_g = freq_table_copy[0].index, max_g = freq_table_copy[0].index;
+    uint16_t uniq_g = 0;
+    for(uint16_t k = 1; k < 256 && freq_table_copy[k].freq != 0; k++) {
+        uniq_g++;
+        if(freq_table_copy[k].index < min_g) {
+            min_g = freq_table_copy[k].index;
+        }
+        if(freq_table_copy[k].index > max_g) {
+            max_g = freq_table_copy[k].index;
+        }
+    }
+    uint8_t incomp_size_g = 0;
+    float incomp_ratio_g = 0.0;
+    uint8_t min_size_g = 0;
+    if(max_g - min_g < 2) {
+        incomp_size_g = 1;
     }   
-    else if(max -min < 4) {
-        incomp_size = 2;
+    else if(max_g - min_g < 4) {
+        incomp_size_g = 2;
     }
-    else if(max -min < 8) {
-        incomp_size = 3;
+    else if(max_g - min_g < 8) {
+        incomp_size_g = 3;
     }
-    else if(max -min < 16) {
-        incomp_size = 4;
+    else if(max_g - min_g < 16) {
+        incomp_size_g = 4;
     }
-    else if(max -min < 32) {
-        incomp_size = 5;
+    else if(max_g - min_g < 32) {
+        incomp_size_g = 5;
     }
-    else if(max -min < 64) {
-        incomp_size = 6;
+    else if(max_g - min_g < 64) {
+        incomp_size_g = 6;
     }
-    else if(max -min < 128) {
-        incomp_size = 7;
-    }
-    else {
-        incomp_size = 0;
-    }
-
-    if(min < 16) {
-        min_size = 0;
+    else if(max_g - min_g < 128) {
+        incomp_size_g = 7;
     }
     else {
-        min_size = 1;
+        incomp_size_g = 0;
     }
 
-    incomp_ratio = (5 + (min_size + 1) * 4 + num_raw_bytes * incomp_size) / raw_bits;
-    //printf("%lf \n", comp_ratio_tmp);
-    if(comp_ratio_tmp > block_comp_opt->comp_ratio || comp_ratio_tmp > incomp_ratio) {
-        if(incomp_ratio < block_comp_opt->comp_ratio) {
+    if(min_g < 16) {
+        min_size_g = 0;
+    }
+    else {
+        min_size_g = 1;
+    }
+
+    incomp_ratio_g = (5 + (min_size_g + 1) * 4 + num_raw_bytes * ((incomp_size_g == 0) ? 8 : incomp_size_g)) / raw_bits;
+    if(comp_ratio_tmp > incomp_ratio_g) {
+        if(incomp_ratio_g < block_comp_opt->comp_ratio) {
             block_comp_opt->block_comp_flag = 0;
-            block_comp_opt->block_incomp_size = incomp_size;
-            block_comp_opt->block_incomp_min = min;
-            block_comp_opt->block_incomp_min_size = min_size;
+            block_comp_opt->block_incomp_size = incomp_size_g;
+            block_comp_opt->block_incomp_min = min_g;
+            block_comp_opt->block_incomp_min_size = min_size_g;
             block_comp_opt->num_raw_states = num_raw_states;
             block_comp_opt->num_raw_bytes = num_raw_bytes;
-            block_comp_opt->comp_ratio = incomp_ratio;
+            block_comp_opt->comp_ratio = incomp_ratio_g;
         }
         return 0;
     }
-
-    if(comp_ratio_tmp < block_comp_opt->comp_ratio) {
-        block_comp_opt->block_comp_flag = 1;
-        block_comp_opt->block_comp_method = comp_method_tmp;
-        block_comp_opt->dict_elem_code = dict_elem_code_tmp;
-        block_comp_opt->num_raw_states = num_raw_states;
-        block_comp_opt->num_raw_bytes = num_raw_bytes;
-        block_comp_opt->dict_elem_bits = dict_elem_size[comp_method_tmp][dict_elem_code_tmp];
-        block_comp_opt->num_dict_elems = num_dict_elems[comp_method_tmp];
-        block_comp_opt->comp_byte_size = comp_byte_size[comp_method_tmp];
-        create_dict_table(freq_table_copy, block_comp_opt->dict_elem_table);
-        block_comp_opt->comp_ratio = comp_ratio_tmp;
+    else {
+        if(comp_ratio_tmp < block_comp_opt->comp_ratio) {
+            block_comp_opt->block_comp_flag = 1;
+            block_comp_opt->block_comp_method = comp_method_tmp;
+            block_comp_opt->dict_elem_code = top_idx_max[comp_method_tmp];
+            block_comp_opt->num_raw_states = num_raw_states;
+            block_comp_opt->num_raw_bytes = num_raw_bytes;
+            block_comp_opt->dict_elem_bits = dict_elem_size[comp_method_tmp][top_idx_max[comp_method_tmp]];
+            block_comp_opt->num_dict_elems = num_dict_elems[comp_method_tmp];
+            block_comp_opt->comp_byte_size = comp_byte_size[comp_method_tmp];
+            memset(block_comp_opt->dict_elem_table, 0, 64 * sizeof(uint8_t));
+            create_dict_table(freq_table_copy, block_comp_opt->dict_elem_table, num_dict_elems[comp_method_tmp]);
+            block_comp_opt->comp_incomp_min = top_freqs_adj[comp_method_tmp][0];
+            block_comp_opt->comp_incomp_flag = top_freqs_adj[comp_method_tmp][1];
+            block_comp_opt->comp_incomp_bits = top_freqs_adj[comp_method_tmp][2];
+            block_comp_opt->comp_ratio = comp_ratio_tmp;
+        }
+        return 0;
     }
-    return 0;
 }
 
 int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes, struct bcomp_state_block *comp_state_block, uint16_t *prev_bytes, uint16_t *rest_bytes) {
@@ -476,7 +568,6 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
     uint16_t curr_state_bytes = 0;
 
     uint16_t i = 0, j = 0;
-    uint8_t header = 0x00;
     int8_t freq_pos = 0;
 
     for(i = 0; i < total_states; i++) {
@@ -491,7 +582,6 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
 
     uint8_t real_io_end = (block_io_end) && (block_comp_opt.num_raw_bytes == block_raw_bytes);
     comp_state_block->io_end = real_io_end;
-    //printf("%d   %d   %d   %d\n", block_comp_opt.block_comp_flag, block_comp_opt.block_comp_method, block_comp_opt.block_incomp_size, block_comp_opt.block_incomp_min_size);
     /* If the whole block is uncompressible, just add a header 0 */
     if(block_comp_opt.block_comp_flag == 0) {
         append_comp_byte_block(comp_state_block, 0x00, 1);
@@ -507,9 +597,13 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
         *rest_bytes = block_raw_bytes - *prev_bytes;
         return 0; 
     }
-    header = (0x80) | (block_comp_opt.block_comp_method << 5) | (block_comp_opt.dict_elem_code << 3) | ((block_comp_opt.num_raw_states) & (0x07));
-    append_comp_byte_block(comp_state_block, header, 8);
-    
+
+    /* Padding the header of 1 */
+    append_comp_byte_block(comp_state_block, 0x80, 1);
+    append_comp_byte_block(comp_state_block, block_comp_opt.block_comp_method << 5, 3);
+    append_comp_byte_block(comp_state_block, block_comp_opt.dict_elem_code << 6, 2);
+    append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
+
     if(block_comp_opt.block_comp_method == 0 && block_comp_opt.dict_elem_code == 3) {
         append_comp_byte_block(comp_state_block, block_comp_opt.dict_elem_table[0], 8);
         if(real_io_end) {
@@ -520,31 +614,24 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
         return 0;
     }
 
+    append_comp_byte_block(comp_state_block, block_comp_opt.comp_incomp_flag << 7, 1);
+    uint8_t incomp_min_bits = ((block_comp_opt.comp_incomp_flag == 0) ? 4 : 8);
+    append_comp_byte_block(comp_state_block, block_comp_opt.comp_incomp_min << (8 - incomp_min_bits), incomp_min_bits);
+    append_comp_byte_block(comp_state_block, block_comp_opt.comp_incomp_bits << 5, 3);
+
     for(i = 0; i < block_comp_opt.num_dict_elems; i++) {
         append_comp_byte_block(comp_state_block, block_comp_opt.dict_elem_table[i] << (8 - block_comp_opt.dict_elem_bits), block_comp_opt.dict_elem_bits);
     }
 
     for(i = 0; i < block_comp_opt.num_raw_bytes; i++) {
-        freq_pos = is_in_dict(block_comp_opt.dict_elem_table, 0, block_comp_opt.num_dict_elems, block[i]);
+        freq_pos = is_in_dict(block_comp_opt.dict_elem_table, 0, block_comp_opt.num_dict_elems, block_comp_opt.num_dict_elems, block[i]);
         if(freq_pos == -3) {
             return -5;
         }
         /* Uncompressible byte found. */
         if(freq_pos < 0) {
             append_comp_byte_block(comp_state_block, (uint8_t)0x00, 1);
-            append_comp_byte_block(comp_state_block, block[i], 8);
-            continue;
-        }
-
-        if(block_comp_opt.block_comp_method == 2) {
-            if(freq_pos < 2) {
-                append_comp_byte_block(comp_state_block, (uint8_t)0x80, 2);
-                append_comp_byte_block(comp_state_block, (freq_pos << 7), 1);
-            }
-            else {
-                append_comp_byte_block(comp_state_block, (uint8_t)0xC0, 2);
-                append_comp_byte_block(comp_state_block, ((freq_pos - 2) << 6), 2);
-            }
+            append_comp_byte_block(comp_state_block, (block[i] - block_comp_opt.comp_incomp_min) << (8 - block_comp_opt.comp_incomp_bits), block_comp_opt.comp_incomp_bits);
             continue;
         }
         append_comp_byte_block(comp_state_block, (uint8_t)0x80, 1);
@@ -556,16 +643,16 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
 }
 
 int check_header_validity(const uint8_t comp_method, const uint8_t dict_elem_code) {
-    if(comp_method > COMP_METHOD_MAX) {
+    if(comp_method >= COMP_METHOD_MAX) {
         return INVALID_HEADER_FLAG;
     }
     if(comp_method == 0) {
-        if(dict_elem_code > DICT_ELEM_CODE_MAX_A) {
+        if(dict_elem_code >= DICT_ELEM_CODE_MAX_A) {
             return INVALID_HEADER_FLAG;
         }
     }
     else {
-        if(dict_elem_code > DICT_ELEM_CODE_MAX_BCD) {
+        if(dict_elem_code >= DICT_ELEM_CODE_MAX_BCD) {
             return INVALID_HEADER_FLAG;
         }
     }
@@ -584,15 +671,19 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
     struct decomp_state decom_state;
     memset(&decom_state, 0, sizeof(struct decomp_state));
 
-    const uint8_t num_dict_elems[4] = {2, 4, 6, 6};
-    const uint8_t dict_elem_size[4][3] = {
+    const uint8_t num_dict_elems[6] = {2, 4, 8, 16, 32, 64};
+    const uint8_t dict_elem_size[6][3] = {
         {1, 4, 8},
         {2, 4, 8},
         {3, 6, 8},
-        {3, 6, 8}
+        {4, 6, 8},
+        {5, 7, 8},
+        {6, 7, 8},
     };
-    const uint8_t comp_byte_size[4] = {1, 2, 0xFF, 3};
-    uint8_t dict_elems[6] = {0x00,};
+
+    const uint8_t comp_byte_size[6] = {1, 2, 3, 4, 5, 6};
+    uint8_t dict_elems[64] = {0x00,};
+    
     uint8_t dict_elem_index = 0;
     uint8_t byte_comp_flag = 0;
     uint8_t comp_method = 0, dict_elem_code = 0;
@@ -632,9 +723,9 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
             }
             continue;
         }
-        get_next_bits(buffer, buffer_size_byte, 2, &comp_method, &decom_state, stream);
+
+        get_next_bits(buffer, buffer_size_byte, 3, &comp_method, &decom_state, stream);
         get_next_bits(buffer, buffer_size_byte, 2, &dict_elem_code, &decom_state, stream);
-        //printf("%d \t %d \n", comp_method, dict_elem_code);
         if(check_header_validity(comp_method, dict_elem_code) == INVALID_HEADER_FLAG) {
             free(buffer);
             return INVALID_HEADER_FLAG;
@@ -671,39 +762,29 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
             continue;
         }
 
+        uint8_t incomp_min_bits = 0, incomp_min = 0, incomp_bits = 0, incomp_byte = 0;
+        get_next_bits(buffer, buffer_size_byte, 1, &incomp_min_bits, &decom_state, stream);
+        incomp_min_bits = (incomp_min_bits == 0) ? 4 : 8;
+        get_next_bits(buffer, buffer_size_byte, incomp_min_bits, &incomp_min, &decom_state, stream);
+        get_next_bits(buffer, buffer_size_byte, 3, &incomp_bits, &decom_state, stream);
+        incomp_bits = (incomp_bits == 0) ? 8 : incomp_bits;
         for(i = 0; i < num_dict_elems[comp_method]; i++) {
             get_next_bits(buffer, buffer_size_byte, dict_elem_size[comp_method][dict_elem_code], dict_elems + i, &decom_state, stream);
         }
+
         for(i = 0; i < comp_states * FULL_STATE_BYTES && (!decomp_read_end(file_size, tail_byte, decom_state)); i++) {
             get_next_bits(buffer, buffer_size_byte, 1, &byte_comp_flag, &decom_state, stream);
             if(byte_comp_flag == 0) {
-                get_next_bits(buffer, buffer_size_byte, 8, state_buffer + i, &decom_state, stream);
+                get_next_bits(buffer, buffer_size_byte, incomp_bits, &incomp_byte, &decom_state, stream);
+                state_buffer[i] = incomp_min + incomp_byte;
+                continue;
             }
-            else {
-                if(comp_method == 2) {
-                    get_next_bits(buffer, buffer_size_byte, 1, &byte_comp_flag, &decom_state, stream);
-                    if(byte_comp_flag == 0) {
-                        get_next_bits(buffer, buffer_size_byte, 1, &dict_elem_index, &decom_state, stream);
-                    }
-                    else {
-                        get_next_bits(buffer, buffer_size_byte, 2, &dict_elem_index, &decom_state, stream);
-                        dict_elem_index += 2;
-                    }
-                    if(dict_elem_index >= num_dict_elems[comp_method]) {
-                        free(buffer);
-                        return INVALID_DATA_TO_DECOMP;
-                    }
-                    state_buffer[i] = dict_elems[dict_elem_index];
-                }
-                else {
-                    get_next_bits(buffer, buffer_size_byte, comp_byte_size[comp_method], &dict_elem_index, &decom_state, stream);
-                    if(dict_elem_index >= num_dict_elems[comp_method]) {
-                        free(buffer);
-                        return INVALID_DATA_TO_DECOMP;
-                    }
-                    state_buffer[i] = dict_elems[dict_elem_index];
-                }
+            get_next_bits(buffer, buffer_size_byte, comp_byte_size[comp_method], &dict_elem_index, &decom_state, stream);
+            if(dict_elem_index >= num_dict_elems[comp_method]) {
+                free(buffer);
+                return INVALID_DATA_TO_DECOMP;
             }
+            state_buffer[i] = dict_elems[dict_elem_index];
         }
         fwrite(state_buffer, sizeof(uint8_t), i - start_pos, target);
         if(decomp_read_end(file_size, tail_byte, decom_state)) {
