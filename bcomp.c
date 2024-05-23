@@ -21,7 +21,7 @@
 #define FREQUENCY_TABLE_SIZE    256
 #define FULL_STATE_BYTES        256
 #define DECOMP_INGEST_BYTES     1024
-#define COMP_METHOD_MAX         6
+#define COMP_METHOD_MAX         7
 #define DICT_ELEM_CODE_MAX_A    4  
 #define DICT_ELEM_CODE_MAX_BCD  3
 #define INVALID_HEADER_FLAG     127
@@ -284,6 +284,7 @@ int sort_and_parse_freq(const struct freq_matrix freq_table[], const uint16_t fr
     uint32_t top_freqs[6] = {0x00, };
     uint8_t top_idx_max_tmp = 0, top_idx_max[6] = {0x00, };
     float comp_ratios[6] = {0.0, };
+    float incomp_ratio_base = (1.0 + raw_bits) / raw_bits;
 
     if(freq_table_copy[0].freq == num_raw_bytes) {
         block_comp_opt->block_comp_flag = 1;
@@ -491,9 +492,20 @@ int sort_and_parse_freq(const struct freq_matrix freq_table[], const uint16_t fr
     }
 
     incomp_ratio_g = (5 + ((min_size_g == 0) ? 4 : 8) + 3 + num_raw_bytes * ((incomp_size_g == 0) ? 8 : incomp_size_g)) / raw_bits;
+    
     if(comp_ratio_tmp > incomp_ratio_g) {
+        if(incomp_ratio_g > incomp_ratio_base) {
+            if(incomp_ratio_base < block_comp_opt->comp_ratio) {
+                block_comp_opt->block_comp_flag = 0;
+                block_comp_opt->num_raw_states = num_raw_states;
+                block_comp_opt->num_raw_bytes = num_raw_bytes;
+                block_comp_opt->comp_ratio = incomp_ratio_base;
+            }
+            return 0;
+        }
         if(incomp_ratio_g < block_comp_opt->comp_ratio) {
-            block_comp_opt->block_comp_flag = 0;
+            block_comp_opt->block_comp_flag = 1;
+            block_comp_opt->block_comp_method = 6;
             block_comp_opt->block_incomp_size = incomp_size_g;
             block_comp_opt->block_incomp_min = min_g;
             block_comp_opt->block_incomp_min_size = min_size_g;
@@ -585,15 +597,9 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
     /* If the whole block is uncompressible, just add a header 0 */
     if(block_comp_opt.block_comp_flag == 0) {
         append_comp_byte_block(comp_state_block, 0x00, 1);
-        append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_size << 5, 3);
-        append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_min_size << 7, 1);
-        uint8_t min_size = 4 * (block_comp_opt.block_incomp_min_size + 1);
-        append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_min << (8 - min_size), min_size);
         append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
-        
-        uint8_t low_bits = (block_comp_opt.block_incomp_size == 0) ? 8 : block_comp_opt.block_incomp_size;
         for(i = 0; i < block_comp_opt.num_raw_bytes; i++) {
-            append_comp_byte_block(comp_state_block, (block[i] - block_comp_opt.block_incomp_min) << (8 - low_bits), low_bits);
+            append_comp_byte_block(comp_state_block, block[i], 8);
         }
         *prev_bytes = block_comp_opt.num_raw_bytes;
         *rest_bytes = block_raw_bytes - *prev_bytes;
@@ -603,6 +609,20 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
     /* Padding the header of 1 */
     append_comp_byte_block(comp_state_block, 0x80, 1);
     append_comp_byte_block(comp_state_block, block_comp_opt.block_comp_method << 5, 3);
+
+    if(block_comp_opt.block_comp_method == 6) {
+        append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_size << 5, 3);
+        append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_min_size << 7, 1);
+        uint8_t min_size = (block_comp_opt.block_incomp_min_size == 0) ? 4 : 8;
+        append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_min << (8 - min_size), min_size);
+        append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
+        uint8_t low_bits = (block_comp_opt.block_incomp_size == 0) ? 8 : block_comp_opt.block_incomp_size;
+        for(i = 0; i < block_comp_opt.num_raw_bytes; i++) {
+            append_comp_byte_block(comp_state_block, (block[i] - block_comp_opt.block_incomp_min) << (8 - low_bits), low_bits);
+        }
+        return 0;
+    }
+
     append_comp_byte_block(comp_state_block, block_comp_opt.dict_elem_code << 6, 2);
     append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
 
@@ -652,13 +672,17 @@ int check_header_validity(const uint8_t comp_method, const uint8_t dict_elem_cod
         if(dict_elem_code >= DICT_ELEM_CODE_MAX_A) {
             return INVALID_HEADER_FLAG;
         }
+        return 0;
     }
-    else {
+    else if(comp_method != 6) {
         if(dict_elem_code >= DICT_ELEM_CODE_MAX_BCD) {
             return INVALID_HEADER_FLAG;
         }
+        return 0;
     }
-    return 0;
+    else {
+        return 0;
+    }
 }
 
 int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte, const int64_t file_size, const uint8_t tail_byte){
@@ -709,6 +733,20 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         memset(state_buffer, 0, FULL_BLOCK_BYTES);
         get_next_bits(buffer, buffer_size_byte, 1, &comp_flag, &decom_state, stream);
         if(comp_flag == 0) {
+            get_next_bits(buffer, buffer_size_byte, 3, &incomp_states, &decom_state, stream);
+            incomp_states = (incomp_states == 0) ? 8 : incomp_states;
+            for(i = 0; i < (incomp_states * FULL_STATE_BYTES) && (!decomp_read_end(file_size, tail_byte, decom_state)); i++) {
+                get_next_bits(buffer, buffer_size_byte, 8, state_buffer + i, &decom_state, stream);
+            }
+            fwrite(state_buffer, sizeof(uint8_t), i - start_pos, target);
+            if(decomp_read_end(file_size, tail_byte, decom_state)) {
+                free(buffer);
+                return 0;
+            }
+            continue;
+        }
+        get_next_bits(buffer, buffer_size_byte, 3, &comp_method, &decom_state, stream);
+        if(comp_method == 6) {
             get_next_bits(buffer, buffer_size_byte, 3, &incomp_size, &decom_state, stream);
             get_next_bits(buffer, buffer_size_byte, 1, &incomp_min_size, &decom_state, stream);
             incomp_min_size = (incomp_min_size == 0) ? 4 : 8;
@@ -727,8 +765,6 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
             }
             continue;
         }
-
-        get_next_bits(buffer, buffer_size_byte, 3, &comp_method, &decom_state, stream);
         get_next_bits(buffer, buffer_size_byte, 2, &dict_elem_code, &decom_state, stream);
         if(check_header_validity(comp_method, dict_elem_code) == INVALID_HEADER_FLAG) {
             free(buffer);
@@ -736,7 +772,6 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         }
         get_next_bits(buffer, buffer_size_byte, 3, &comp_states, &decom_state, stream);
         comp_states = (comp_states == 0) ? 8 : comp_states;
-
         if(comp_method == 0 && dict_elem_code == 3) {
             uint8_t unique_dict_elem = 0;
             uint8_t unique_elem_last = 0;
