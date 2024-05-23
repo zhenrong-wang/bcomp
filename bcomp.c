@@ -597,7 +597,7 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
     /* If the whole block is uncompressible, just add a header 0 */
     if(block_comp_opt.block_comp_flag == 0) {
         append_comp_byte_block(comp_state_block, 0x00, 1);
-        //append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
+        append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
         for(i = 0; i < block_comp_opt.num_raw_bytes; i++) {
             append_comp_byte_block(comp_state_block, block[i], 8);
         }
@@ -615,7 +615,7 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
         append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_min_size << 7, 1);
         uint8_t min_size = (block_comp_opt.block_incomp_min_size == 0) ? 4 : 8;
         append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_min << (8 - min_size), min_size);
-        //append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
+        append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
         uint8_t low_bits = (block_comp_opt.block_incomp_size == 0) ? 8 : block_comp_opt.block_incomp_size;
         for(i = 0; i < block_comp_opt.num_raw_bytes; i++) {
             append_comp_byte_block(comp_state_block, (block[i] - block_comp_opt.block_incomp_min) << (8 - low_bits), low_bits);
