@@ -58,7 +58,7 @@ struct bcomp_byte {
 };*/
 
 struct bcomp_obuffer_block {
-    uint8_t bytes_array_block[FULL_BLOCK_BYTES + 1];
+    uint8_t bytes_array_block[FULL_BLOCK_BYTES + 8];
     uint16_t bytes_valid;
     uint8_t prev_tail;
     uint8_t prev_tail_high_bits;
@@ -66,7 +66,7 @@ struct bcomp_obuffer_block {
 };
 
 struct bcomp_state_block {
-    uint8_t  bytes_block[FULL_BLOCK_BYTES + 1];
+    uint8_t  bytes_block[FULL_BLOCK_BYTES + 8];
     uint16_t curr_byte;
     uint8_t  curr_bits_suffix;
     uint16_t  total_bits;
@@ -432,7 +432,7 @@ int sort_and_parse_freq(const struct freq_matrix freq_table[], const uint16_t fr
     
     for(i = 0; i < 6; i++) {
         uint8_t incomp_min_size = (top_freqs_adj[i][1] == 1) ? 8 : 4;
-        comp_ratios[i] = (float)(10 + incomp_min_size + 3 + dict_total_size[i][top_idx_max[i]] + top_freqs[i] * comp_byte_size[i] + (num_raw_bytes - top_freqs[i]) * (1 + top_freqs_adj[i][2])) / raw_bits;
+        comp_ratios[i] = (float)(10 + incomp_min_size + 3 + dict_total_size[i][top_idx_max[i]] + top_freqs[i] * (1 + comp_byte_size[i]) + (num_raw_bytes - top_freqs[i]) * (1 + top_freqs_adj[i][2])) / raw_bits;
     }
 
     float comp_ratio_tmp = comp_ratios[0];
@@ -492,7 +492,6 @@ int sort_and_parse_freq(const struct freq_matrix freq_table[], const uint16_t fr
     }
 
     incomp_ratio_g = (5 + ((min_size_g == 0) ? 4 : 8) + 3 + num_raw_bytes * ((incomp_size_g == 0) ? 8 : incomp_size_g)) / raw_bits;
-    //printf("%lf %lf %lf %lf\n", comp_ratio_tmp, incomp_ratio_base, incomp_ratio_g, block_comp_opt->comp_ratio);
     
     if(comp_ratio_tmp > incomp_ratio_g) {
         if(incomp_ratio_g > incomp_ratio_base) {
@@ -544,7 +543,7 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
     if(block_raw_bytes > FULL_BLOCK_BYTES) {
         return -3;
     }
-    memset(comp_state_block->bytes_block, 0, (FULL_BLOCK_BYTES + 1) * sizeof(uint8_t));
+    memset(comp_state_block->bytes_block, 0, (FULL_BLOCK_BYTES + 8) * sizeof(uint8_t));
 
     comp_state_block->curr_bits_suffix = 8;
     comp_state_block->curr_byte = 0;
@@ -596,10 +595,9 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
     uint8_t real_io_end = (block_io_end) && (block_comp_opt.num_raw_bytes == block_raw_bytes);
     comp_state_block->io_end = real_io_end;
     /* If the whole block is uncompressible, just add a header 0 */
-    //printf("%d -- %d -- %d\n", block_comp_opt.block_comp_flag, block_comp_opt.block_comp_method, block_comp_opt.dict_elem_code);
     if(block_comp_opt.block_comp_flag == 0) {
         append_comp_byte_block(comp_state_block, 0x00, 1);
-        append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
+        //append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
         for(i = 0; i < block_comp_opt.num_raw_bytes; i++) {
             append_comp_byte_block(comp_state_block, block[i], 8);
         }
@@ -617,7 +615,7 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
         append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_min_size << 7, 1);
         uint8_t min_size = (block_comp_opt.block_incomp_min_size == 0) ? 4 : 8;
         append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_min << (8 - min_size), min_size);
-        append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
+        //append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
         uint8_t low_bits = (block_comp_opt.block_incomp_size == 0) ? 8 : block_comp_opt.block_incomp_size;
         for(i = 0; i < block_comp_opt.num_raw_bytes; i++) {
             append_comp_byte_block(comp_state_block, (block[i] - block_comp_opt.block_incomp_min) << (8 - low_bits), low_bits);
@@ -841,7 +839,7 @@ int padding_comp_obuffer(const struct bcomp_state_block *comp_state_block, struc
     if(comp_state_block == NULL || output_buffer == NULL) {
         return -1;
     }
-    memset(output_buffer->bytes_array_block, 0, (FULL_BLOCK_BYTES + 1) * sizeof(uint8_t));
+    memset(output_buffer->bytes_array_block, 0, (FULL_BLOCK_BYTES + 8) * sizeof(uint8_t));
     output_buffer->io_end = comp_state_block->io_end;
     output_buffer->bytes_valid = 0;
     //uint8_t initial = 0xFF;
@@ -855,12 +853,10 @@ int padding_comp_obuffer(const struct bcomp_state_block *comp_state_block, struc
 
     output_buffer->bytes_array_block[0] = tail_byte_prev | (comp_state_block->bytes_block[0] >> tail_bits_prev);
     i++;
-
     while(i < total_bytes) {
         output_buffer->bytes_array_block[i] = (comp_state_block->bytes_block[i-1] << (8 - tail_bits_prev)) | (comp_state_block->bytes_block[i] >> tail_bits_prev);
         i++;
     }
-
     output_buffer->prev_tail_high_bits = tail_bits_new;
     output_buffer->bytes_valid = total_bytes;
     if(output_buffer->io_end == 0) {
