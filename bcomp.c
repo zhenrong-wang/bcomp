@@ -491,11 +491,12 @@ int sort_and_parse_freq(const struct freq_matrix freq_table[], const uint16_t fr
         min_size_g = 1;
     }
 
-    incomp_ratio_g = (5 + ((min_size_g == 0) ? 4 : 8) + 3 + num_raw_bytes * ((incomp_size_g == 0) ? 8 : incomp_size_g)) / raw_bits;
+    incomp_ratio_g = (5 + ((min_size_g == 0) ? 4 : 8) + num_raw_bytes * ((incomp_size_g == 0) ? 8 : incomp_size_g)) / raw_bits;
+    //printf("%lf %lf %lf %lf\n", comp_ratio_tmp, incomp_ratio_base, incomp_ratio_g, block_comp_opt->comp_ratio);
     
     if(comp_ratio_tmp > incomp_ratio_g) {
         if(incomp_ratio_g > incomp_ratio_base) {
-            if(incomp_ratio_base < block_comp_opt->comp_ratio) {
+            if(incomp_ratio_base < block_comp_opt->comp_ratio && (num_raw_states == BLOCK_MAX_STATE_NUM || (num_raw_bytes % FULL_STATE_BYTES))) {
                 block_comp_opt->block_comp_flag = 0;
                 block_comp_opt->num_raw_states = num_raw_states;
                 block_comp_opt->num_raw_bytes = num_raw_bytes;
@@ -503,7 +504,7 @@ int sort_and_parse_freq(const struct freq_matrix freq_table[], const uint16_t fr
             }
             return 0;
         }
-        if(incomp_ratio_g < block_comp_opt->comp_ratio) {
+        if(incomp_ratio_g < block_comp_opt->comp_ratio && (num_raw_states == BLOCK_MAX_STATE_NUM || (num_raw_bytes % FULL_STATE_BYTES))) {
             block_comp_opt->block_comp_flag = 1;
             block_comp_opt->block_comp_method = 6;
             block_comp_opt->block_incomp_size = incomp_size_g;
@@ -595,9 +596,10 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
     uint8_t real_io_end = (block_io_end) && (block_comp_opt.num_raw_bytes == block_raw_bytes);
     comp_state_block->io_end = real_io_end;
     /* If the whole block is uncompressible, just add a header 0 */
+    //printf("%d -- %d -\n", block_comp_opt.block_comp_flag, block_comp_opt.block_comp_method);
     if(block_comp_opt.block_comp_flag == 0) {
         append_comp_byte_block(comp_state_block, 0x00, 1);
-        append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
+        //append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
         for(i = 0; i < block_comp_opt.num_raw_bytes; i++) {
             append_comp_byte_block(comp_state_block, block[i], 8);
         }
@@ -615,7 +617,7 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
         append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_min_size << 7, 1);
         uint8_t min_size = (block_comp_opt.block_incomp_min_size == 0) ? 4 : 8;
         append_comp_byte_block(comp_state_block, block_comp_opt.block_incomp_min << (8 - min_size), min_size);
-        append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
+        //append_comp_byte_block(comp_state_block, block_comp_opt.num_raw_states << 5, 3);
         uint8_t low_bits = (block_comp_opt.block_incomp_size == 0) ? 8 : block_comp_opt.block_incomp_size;
         for(i = 0; i < block_comp_opt.num_raw_bytes; i++) {
             append_comp_byte_block(comp_state_block, (block[i] - block_comp_opt.block_incomp_min) << (8 - low_bits), low_bits);
@@ -735,9 +737,9 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
         memset(state_buffer, 0, FULL_BLOCK_BYTES);
         get_next_bits(buffer, buffer_size_byte, 1, &comp_flag, &decom_state, stream);
         if(comp_flag == 0) {
-            get_next_bits(buffer, buffer_size_byte, 3, &incomp_states, &decom_state, stream);
-            incomp_states = (incomp_states == 0) ? 8 : incomp_states;
-            for(i = 0; i < (incomp_states * FULL_STATE_BYTES) && (!decomp_read_end(file_size, tail_byte, decom_state)); i++) {
+            //get_next_bits(buffer, buffer_size_byte, 3, &incomp_states, &decom_state, stream);
+            //incomp_states = (incomp_states == 0) ? 8 : incomp_states;
+            for(i = 0; i < FULL_BLOCK_BYTES && (!decomp_read_end(file_size, tail_byte, decom_state)); i++) {
                 get_next_bits(buffer, buffer_size_byte, 8, state_buffer + i, &decom_state, stream);
             }
             fwrite(state_buffer, sizeof(uint8_t), i - start_pos, target);
@@ -754,9 +756,9 @@ int file_decomp_core(FILE *stream, FILE *target, const uint64_t buffer_size_byte
             incomp_min_size = (incomp_min_size == 0) ? 4 : 8;
             get_next_bits(buffer, buffer_size_byte, incomp_min_size, &incomp_min, &decom_state, stream);
             incomp_size = (incomp_size == 0) ? 8 : incomp_size;
-            get_next_bits(buffer, buffer_size_byte, 3, &incomp_states, &decom_state, stream);
-            incomp_states = (incomp_states == 0) ? 8 : incomp_states;
-            for(i = 0; i < (incomp_states * FULL_STATE_BYTES) && (!decomp_read_end(file_size, tail_byte, decom_state)); i++) {
+            //get_next_bits(buffer, buffer_size_byte, 3, &incomp_states, &decom_state, stream);
+            //incomp_states = (incomp_states == 0) ? 8 : incomp_states;
+            for(i = 0; i < FULL_BLOCK_BYTES && (!decomp_read_end(file_size, tail_byte, decom_state)); i++) {
                 get_next_bits(buffer, buffer_size_byte, incomp_size, &incomp_byte, &decom_state, stream);
                 state_buffer[i] = incomp_min + incomp_byte;
             }
