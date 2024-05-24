@@ -492,6 +492,7 @@ int sort_and_parse_freq(const struct freq_matrix freq_table[], const uint16_t fr
     }
 
     incomp_ratio_g = (5 + ((min_size_g == 0) ? 4 : 8) + 3 + num_raw_bytes * ((incomp_size_g == 0) ? 8 : incomp_size_g)) / raw_bits;
+    //printf("%lf::%lf::%lf\n", incomp_ratio_g, incomp_ratio_base, comp_ratio_tmp);
     
     if(comp_ratio_tmp > incomp_ratio_g) {
         if(incomp_ratio_g > incomp_ratio_base) {
@@ -591,7 +592,6 @@ int8_t block_compress_core(const uint8_t block[], const uint16_t block_raw_bytes
         }
         sort_and_parse_freq(freq_table, FREQUENCY_TABLE_SIZE, num_raw_bytes, num_raw_states, &block_comp_opt);
     }
-
     uint8_t real_io_end = (block_io_end) && (block_comp_opt.num_raw_bytes == block_raw_bytes);
     comp_state_block->io_end = real_io_end;
     /* If the whole block is uncompressible, just add a header 0 */
