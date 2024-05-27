@@ -44,9 +44,9 @@ Let's take a sample text for an example:
 
 ```A \space c a t h e s r```, with the size of `9 * 8 = 72 bits`. 
 
-The original dictionary: {'A', ' ', 'c', 'a', 't', 'h', 'e', 's', 'r'};
+The Unique dictionary: `{'A', ' ', 'c', 'a', 't', 'h', 'e', 's', 'r'}`;
 
-### 2.2.2 Build the Dictionary:
+### 2.2.2 Build the Expanded Dictionary:
 
 Scan the original bytes to build the dictionary.
 
